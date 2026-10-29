@@ -9,7 +9,7 @@ const src = [
   grab(/const FIELDS = .*;/, "FIELDS"),
   grab(/const digits = .*;/, "digits"),
   grab(/const blankCard = .*;/, "blankCard"),
-  grab(/\/\/ =+ parser[\s\S]*?(?=\/\/ =+ Gemini)/, "parser 구획"),
+  grab(/\/\/ =+ parser[\s\S]*?(?=\/\/ =+ AI 읽기)/, "parser 구획"),
   "return parseCardText;"
 ].join("\n");
 const parseCardText = new Function(src)();

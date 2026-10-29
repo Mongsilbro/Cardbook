@@ -160,7 +160,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   <div id="list" class="list"></div>
 
   <div class="links">
-    <button class="linkbtn" id="openSettings" type="button">제미나이 설정</button>
+    <button class="linkbtn" id="openSettings" type="button">AI 설정</button>
     <button class="linkbtn" id="openBackup" type="button">백업 · 복원</button>
   </div>
   <p class="note" style="text-align:center">명함은 이 아이폰의 Safari에만 저장됩니다. 가끔 백업해 두세요.</p>
@@ -176,7 +176,9 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   const FIELDS = [["name","이름"],["company","회사"],["department","부서"],["jobTitle","직함"],["mobile","휴대폰"],["phone","전화"],["fax","팩스"],["email","이메일"],["website","웹사이트"],["address","주소"],["memo","메모"]];
   const KEY_CARDS = "cardbook.cards.v1";
   const KEY_GEMINI = "cardbook.gemini.v1";
-  const DEFAULT_MODEL = "gemini-3.6-flash";
+  const DEFAULT_MODEL = "gemini-3.5-flash-lite"; // 제미나이 중 가장 빠름, 무료
+  const OLD_MODELS = ["gemini-3.6-flash"];        // 예전 기본값으로 저장된 설정은 새 기본값으로
+  const DEFAULT_GROQ_MODEL = "qwen/qwen3.8-27b";
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -214,21 +216,22 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   // 주소 끝(#k=...)에 키를 담아 두면, 저장소가 지워져도 홈 화면 아이콘으로 열 때 다시 채워짐
   const b64e = (str) => btoa(unescape(encodeURIComponent(str))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const b64d = (str) => decodeURIComponent(escape(atob(str.replace(/-/g, "+").replace(/_/g, "/"))));
+  const hasKey = (g) => !!(g && (g.key || g.groq));
   function geminiFromHash() {
     const m = location.hash.match(/[#&]k=([A-Za-z0-9_\-]+)/);
     if (!m) return null;
-    try { const g = JSON.parse(b64d(m[1])); return g && typeof g.key === "string" && g.key ? { key: g.key, model: g.model || DEFAULT_MODEL } : null; } catch { return null; }
+    try { const g = JSON.parse(b64d(m[1])); return hasKey(g) ? { key: g.key || "", model: g.model || "", groq: g.groq || "", groqModel: g.groqModel || "" } : null; } catch { return null; }
   }
   function keyHashUrl(g) {
-    return location.origin + location.pathname + "#k=" + b64e(JSON.stringify({ key: g.key, model: g.model }));
+    return location.origin + location.pathname + "#k=" + b64e(JSON.stringify({ key: g.key, model: g.model, groq: g.groq || undefined, groqModel: g.groqModel || undefined }));
   }
   function saveGemini(g) {
     gemini = g;
     store(KEY_GEMINI, g);
     idb.set(KEY_GEMINI, g);
-    setCookie("cbk", g.key ? JSON.stringify(g) : "");
+    setCookie("cbk", hasKey(g) ? JSON.stringify(g) : "");
     try {
-      if (g.key) history.replaceState(null, "", keyHashUrl(g));
+      if (hasKey(g)) history.replaceState(null, "", keyHashUrl(g));
       else history.replaceState(null, "", location.pathname);
     } catch {}
   }
@@ -238,8 +241,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   (function restoreGeminiSync() {
     const fromHash = geminiFromHash();
     if (fromHash) { gemini = fromHash; store(KEY_GEMINI, gemini); idb.set(KEY_GEMINI, gemini); setCookie("cbk", JSON.stringify(gemini)); return; }
-    if (!gemini.key) {
-      try { const c = getCookie("cbk"); if (c) { const g = JSON.parse(c); if (g?.key) { gemini = g; store(KEY_GEMINI, g); } } } catch {}
+    if (!hasKey(gemini)) {
+      try { const c = getCookie("cbk"); if (c) { const g = JSON.parse(c); if (hasKey(g)) { gemini = g; store(KEY_GEMINI, g); } } } catch {}
     }
   })();
   try { navigator.storage?.persist?.(); } catch {}
@@ -395,48 +398,104 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     return d;
   }
 
-  // ================= Gemini (선택) =================
+  // ================= AI 읽기 (선택: 제미나이 + Groq) =================
+  // 제미나이(한글 정확도 최고)를 먼저 보내고, 4초 안에 답이 없거나 실패하면 Groq(아주 빠름)도 보내 먼저 온 답을 씀
+  const HEDGE_MS = 4000;
+  const PROMPT = [
+    "이 이미지는 명함 사진입니다. 인쇄된 정보를 읽어 JSON 객체 하나만 출력하세요.",
+    "키: name, company, department, jobTitle, mobile, phone, fax, email, website, address, memo (모두 문자열).",
+    "한글과 영문이 함께 있으면 한글 이름·회사명을 쓰고 영문 표기는 memo에. 전화번호는 하이픈 형식(010-1234-5678, 02-123-4567), +82는 0으로.",
+    "010 등 휴대폰은 mobile, 대표·직통은 phone, 팩스는 fax. 이메일은 소문자. website는 http 없이. address는 한 줄로.",
+    "칸에 넣지 못한 정보는 memo에 줄바꿈으로. 없는 항목은 빈 문자열. 인쇄된 글자만 옮기고 추측하지 마세요."
+  ].join("\n");
+  const geminiModel = () => { const m = (gemini.model || "").trim(); return !m || OLD_MODELS.includes(m) ? DEFAULT_MODEL : m; };
+  const groqModel = () => (gemini.groqModel || "").trim() || DEFAULT_GROQ_MODEL;
+  function parseLooseJson(text) {
+    const t = String(text).replace(/<think>[\s\S]*?<\/think>/g, "");
+    const a = t.indexOf("{"), b = t.lastIndexOf("}");
+    if (a < 0 || b < a) throw new Error("응답에 JSON이 없습니다");
+    return JSON.parse(t.slice(a, b + 1));
+  }
+  async function apiError(res) {
+    let msg = "";
+    try { const j = await res.json(); msg = j?.error?.message || ""; } catch {}
+    const e = new Error(msg || ("HTTP " + res.status)); e.status = res.status; return e;
+  }
+
   // 생각(thinking)은 명함 옮겨 적기에 필요 없고 몇 초씩 걸리므로 최소로. 모델이 그 값을 안 받으면 다음 값으로 물러남
   const THINK = ["minimal", "low", null];
   let thinkIdx = 0;
-  async function readWithGemini(jpegBlob, signal) {
+  async function readWithGemini(b64, signal) {
+    for (;;) {
+      const level = THINK[thinkIdx];
+      // temperature는 기본값(1.0) 그대로: 제미나이 3은 낮추면 같은 말을 되풀이하며 느려질 수 있음
+      const generationConfig = { responseMimeType: "application/json" };
+      if (level) generationConfig.thinkingConfig = { thinkingLevel: level };
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel())}:generateContent`, {
+        method: "POST", signal,
+        headers: { "Content-Type": "application/json", "x-goog-api-key": gemini.key.trim() },
+        body: JSON.stringify({ contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }], generationConfig })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return parseLooseJson(data?.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "");
+      }
+      const e = await apiError(res);
+      if (res.status === 400 && level && /think/i.test(e.message)) { thinkIdx++; continue; }
+      throw e;
+    }
+  }
+
+  // Groq: OpenAI 형식. 추론을 끄고(reasoning_effort none) JSON으로 받음. 모델이 어떤 옵션을 거부하면 그 옵션을 빼고 다시
+  const groqOpts = { response_format: { type: "json_object" }, reasoning_effort: "none", reasoning_format: "hidden" };
+  async function readWithGroq(b64, signal) {
+    for (;;) {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST", signal,
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + gemini.groq.trim() },
+        body: JSON.stringify({
+          model: groqModel(), ...groqOpts,
+          messages: [{ role: "user", content: [{ type: "text", text: PROMPT }, { type: "image_url", image_url: { url: "data:image/jpeg;base64," + b64 } }] }]
+        })
+      });
+      if (res.ok) return parseLooseJson((await res.json())?.choices?.[0]?.message?.content || "");
+      const e = await apiError(res);
+      const bad = res.status === 400 && Object.keys(groqOpts).find(k => e.message.includes(k));
+      if (bad) { delete groqOpts[bad]; continue; }
+      throw e;
+    }
+  }
+
+  async function readCard(jpegBlob, signal) {
     const b64 = await new Promise((res, rej) => {
       const fr = new FileReader();
       fr.onload = () => res(String(fr.result).split(",")[1]);
       fr.onerror = rej;
       fr.readAsDataURL(jpegBlob);
     });
-    const prompt = [
-      "이 이미지는 명함 사진입니다. 인쇄된 정보를 읽어 JSON 객체 하나만 출력하세요.",
-      "키: name, company, department, jobTitle, mobile, phone, fax, email, website, address, memo (모두 문자열).",
-      "한글과 영문이 함께 있으면 한글 이름·회사명을 쓰고 영문 표기는 memo에. 전화번호는 하이픈 형식(010-1234-5678, 02-123-4567), +82는 0으로.",
-      "010 등 휴대폰은 mobile, 대표·직통은 phone, 팩스는 fax. 이메일은 소문자. website는 http 없이. address는 한 줄로.",
-      "칸에 넣지 못한 정보는 memo에 줄바꿈으로. 없는 항목은 빈 문자열. 인쇄된 글자만 옮기고 추측하지 마세요."
-    ].join("\n");
-    const model = (gemini.model || DEFAULT_MODEL).trim();
-    let res;
-    for (;;) {
-      const level = THINK[thinkIdx];
-      // temperature는 기본값(1.0) 그대로: 제미나이 3은 낮추면 같은 말을 되풀이하며 느려질 수 있음
-      const generationConfig = { responseMimeType: "application/json" };
-      if (level) generationConfig.thinkingConfig = { thinkingLevel: level };
-      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-        method: "POST", signal,
-        headers: { "Content-Type": "application/json", "x-goog-api-key": gemini.key.trim() },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }],
-          generationConfig
-        })
-      });
-      if (res.ok) break;
-      let msg = "";
-      try { msg = (await res.json())?.error?.message || ""; } catch {}
-      if (res.status === 400 && level && /think/i.test(msg)) { thinkIdx++; continue; }
-      const e = new Error(msg || ("HTTP " + res.status)); e.status = res.status; throw e;
-    }
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
-    return JSON.parse(text.replace(/^```(?:json)?|```$/g, "").trim());
+    const jobs = [];
+    if (gemini.key) jobs.push(["제미나이", readWithGemini]);
+    if (gemini.groq) jobs.push(["Groq", readWithGroq]);
+    return new Promise((resolve, reject) => {
+      const acs = [], errs = [];
+      let started = 0, done = false, timer;
+      const finish = () => { done = true; clearTimeout(timer); acs.forEach(a => a.abort()); };
+      const start = () => {
+        clearTimeout(timer);
+        if (done || started >= jobs.length) return;
+        const [name, run] = jobs[started++], ac = new AbortController();
+        acs.push(ac);
+        run(b64, ac.signal).then(r => { if (!done) { finish(); resolve({ data: r, by: name }); } }, e => {
+          if (done) return;
+          e.provider = name; errs.push(e);
+          if (started < jobs.length) start();
+          else if (errs.length === jobs.length) { finish(); reject(errs[0]); }
+        });
+        if (started < jobs.length) timer = setTimeout(start, HEDGE_MS);
+      };
+      signal?.addEventListener("abort", () => { if (!done) { finish(); reject(new DOMException("취소", "AbortError")); } });
+      start();
+    });
   }
 
   // ================= image =================
@@ -753,7 +812,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
         : `<input id="f-${k}" value="${v}" ${o.type ? `type="${o.type}"` : ""} ${o.mode ? `inputmode="${o.mode}"` : ""} autocomplete="off" autocapitalize="off" autocorrect="off">`;
       return `<div class="field ${o.mono ? "mono" : ""}"><label for="f-${k}">${label}</label>${ctrl}</div>`;
     };
-    const geminiOn = !!gemini.key;
+    const geminiOn = hasKey(gemini);
     openSheet(`
       ${bar(`<button class="linkbtn" type="button" data-act="close">취소</button>`, isNew ? "새 명함" : "명함 편집", `<button class="linkbtn strong" type="button" data-act="save">저장</button>`)}
       <div class="sheet-body">
@@ -766,7 +825,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           </ol>
           <div class="row2">
             <button class="btn small" type="button" data-act="paste">복사한 글자 붙여넣기</button>
-            <label class="btn small filebtn">${geminiOn ? "사진 찍고 제미나이로 읽기" : "명함 사진 첨부"}<input id="photoIn" type="file" accept="image/*"></label>
+            <label class="btn small filebtn">${geminiOn ? "사진 찍고 AI로 읽기" : "명함 사진 첨부"}<input id="photoIn" type="file" accept="image/*"></label>
           </div>
           <div id="readStatus"></div>
         </div>` : ""}
@@ -917,14 +976,14 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     try { found = findCardQuad(src); } catch {}
     const read = (canvas) => {
       const ac = new AbortController();
-      const p = new Promise(r => canvas.toBlob(r, "image/jpeg", 0.85)).then(b => readWithGemini(b, ac.signal));
+      const p = new Promise(r => canvas.toBlob(r, "image/jpeg", 0.85)).then(b => readCard(b, ac.signal));
       p.catch(() => {});
       return { ac, p };
     };
     const dialog = cropDialog(src, found);
     // 모서리를 맞추는 동안 자동으로 찾은 영역(못 찾았으면 사진 전체)을 미리 제미나이에 보냄
     let pre = null;
-    if (gemini.key) {
+    if (hasKey(gemini)) {
       await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
       pre = read(found ? warpQuad(src, found, 1200) : drawScaled(src, 1200));
     }
@@ -933,23 +992,23 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     s.src = src; s.quad = quad;
     const big = quad ? warpQuad(src, quad, 1200) : drawScaled(src, 1200);
     setPhoto(s, big);
-    if (!gemini.key) { setStatus("사진을 첨부했습니다. 글자는 위 칸에서 텍스트 스캔으로 넣어 주세요."); return; }
+    if (!hasKey(gemini)) { setStatus("사진을 첨부했습니다. 글자는 위 칸에서 텍스트 스캔으로 넣어 주세요."); return; }
     // 자동 영역이 틀려 모서리를 크게 옮겼으면 새로 자른 사진으로 다시 읽음
     const far = found && quad && quad.some((p, i) => Math.hypot(p[0] - found[i][0], p[1] - found[i][1]) > 0.04 * Math.hypot(src.width, src.height));
     if (far) { pre.ac.abort(); pre = read(big); }
-    setStatus("제미나이가 명함을 읽고 있습니다…", "busy");
+    setStatus("AI가 명함을 읽고 있습니다…", "busy");
     try {
       const result = await pre.p;
       if (sheet !== s) return;
-      const n = fillFields(result || {}, false);
-      setStatus(n ? "제미나이가 칸을 채웠습니다. 틀린 곳을 고친 뒤 저장하세요." : "글자를 찾지 못했습니다. 텍스트 스캔을 이용해 주세요.");
+      const n = fillFields(result.data || {}, false);
+      setStatus(n ? `칸을 채웠습니다(${result.by}). 틀린 곳을 고친 뒤 저장하세요.` : "글자를 찾지 못했습니다. 텍스트 스캔을 이용해 주세요.");
     } catch (err) {
       if (sheet !== s) return;
-      const st = err?.status;
-      const msg = st === 400 || st === 403 ? "API 키가 맞지 않거나 모델 이름이 틀렸습니다. 제미나이 설정을 확인해 주세요."
-        : st === 404 ? "모델을 찾을 수 없습니다. 제미나이 설정에서 모델 이름을 확인해 주세요."
-        : st === 429 ? "제미나이 무료 한도에 걸렸습니다. 잠시 후 다시 하거나 텍스트 스캔을 이용해 주세요."
-        : "제미나이로 읽지 못했습니다. 인터넷 연결을 확인하거나 텍스트 스캔을 이용해 주세요.";
+      const st = err?.status, who = err?.provider || "AI";
+      const msg = st === 400 || st === 401 || st === 403 ? `${who} API 키가 맞지 않거나 모델 이름이 틀렸습니다. AI 설정을 확인해 주세요.`
+        : st === 404 ? `${who} 모델을 찾을 수 없습니다. AI 설정에서 모델 이름을 확인해 주세요.`
+        : st === 429 ? `${who} 무료 한도에 걸렸습니다. 잠시 후 다시 하거나 텍스트 스캔을 이용해 주세요.`
+        : `${who}에서 읽지 못했습니다. 인터넷 연결을 확인하거나 텍스트 스캔을 이용해 주세요.`;
       setStatus(msg, "err");
     }
   }
@@ -1005,21 +1064,31 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   function openSettings() {
     sheet = { kind: "settings" };
+    const inp = (id, v, ph, pw) => `<input id="${id}" ${pw ? 'type="password"' : ""} value="${esc(v)}" placeholder="${ph}" autocomplete="off" autocapitalize="off" autocorrect="off">`;
     openSheet(`
-      ${bar(`<button class="linkbtn" type="button" data-act="close">닫기</button>`, "제미나이 설정", `<button class="linkbtn strong" type="button" data-act="saveSettings">저장</button>`)}
+      ${bar(`<button class="linkbtn" type="button" data-act="close">닫기</button>`, "AI 설정", `<button class="linkbtn strong" type="button" data-act="saveSettings">저장</button>`)}
       <div class="sheet-body settings">
-        <p class="note">키를 넣으면 <b>명함 사진</b>을 찍을 때 제미나이가 글자를 읽습니다. 키가 없어도 텍스트 스캔으로 무료로 쓸 수 있습니다.</p>
-        <div class="group">
-          <div class="field"><label for="gKey">API 키</label><input id="gKey" type="password" value="${esc(gemini.key)}" placeholder="AIza…" autocomplete="off" autocapitalize="off" autocorrect="off"></div>
-          <div class="field"><label for="gModel">모델</label><input id="gModel" value="${esc(gemini.model || DEFAULT_MODEL)}" autocomplete="off" autocapitalize="off" autocorrect="off"></div>
-        </div>
+        <p class="note">키를 넣으면 <b>명함 사진</b>을 찍을 때 AI가 글자를 읽습니다. 둘 다 무료이고, 키가 없어도 텍스트 스캔으로 쓸 수 있습니다.
+          제미나이는 한글을 가장 정확히 읽고, Groq는 아주 빠릅니다. <b>둘 다 넣으면</b> 제미나이가 4초 안에 답하지 않거나 실패할 때 Groq가 이어받습니다.</p>
+        <div><p class="group-title">제미나이 (추천)</p><div class="group">
+          <div class="field"><label for="gKey">API 키</label>${inp("gKey", gemini.key, "AIza…", true)}</div>
+          <div class="field"><label for="gModel">모델</label>${inp("gModel", geminiModel(), DEFAULT_MODEL)}</div>
+        </div></div>
         <ol class="steps">
           <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="color:var(--accent)">Google AI Studio</a>에 구글 계정으로 로그인</li>
           <li><b>Create API key</b>로 키를 만들어 복사한 뒤 위 칸에 붙여넣기</li>
           <li>무료 요금제는 보낸 내용이 구글 제품 개선에 쓰일 수 있습니다.</li>
-          <li>키는 이 아이폰에만 저장되고 구글 외 다른 곳으로 보내지 않습니다.</li>
         </ol>
-        ${gemini.key ? `<div class="status">키가 저장되어 있습니다. 키를 다시 넣지 않으려면 <b>&nbsp;아래 순서로 홈 화면 아이콘을 한 번 다시 만들어 주세요.</b></div>
+        <div><p class="group-title">Groq (선택 · 예비)</p><div class="group">
+          <div class="field"><label for="qKey">API 키</label>${inp("qKey", gemini.groq || "", "gsk_…", true)}</div>
+          <div class="field"><label for="qModel">모델</label>${inp("qModel", groqModel(), DEFAULT_GROQ_MODEL)}</div>
+        </div></div>
+        <ol class="steps">
+          <li><a href="https://console.groq.com/keys" target="_blank" rel="noopener" style="color:var(--accent)">GroqCloud</a>에 구글 계정 등으로 가입 (카드 등록 없음)</li>
+          <li><b>Create API Key</b>로 키를 만들어 위 칸에 붙여넣기</li>
+        </ol>
+        <p class="note">키는 이 아이폰에만 저장되고, 명함 사진은 키를 넣은 회사(구글·Groq)로만 보냅니다.</p>
+        ${hasKey(gemini) ? `<div class="status"><span>키가 저장되어 있습니다. 키를 다시 넣지 않으려면 <b>아래 순서로 홈 화면 아이콘을 한 번 다시 만들어 주세요.</b></span></div>
         <ol class="steps">
           <li>지금 주소창 주소 끝에 <b>#k=…</b>가 붙어 있습니다. 이 주소에 키가 담겨 있습니다.</li>
           <li>기존 홈 화면 아이콘을 지우고, 지금 화면에서 공유(□↑) → <b>홈 화면에 추가</b>를 누릅니다.</li>
@@ -1027,7 +1096,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           <li>이 주소는 다른 사람에게 보내지 마세요. 키가 함께 전달됩니다.</li>
         </ol>
         <button class="btn small" type="button" data-act="copyKeyUrl">키가 담긴 주소 복사 (북마크용)</button>` : ""}
-        ${gemini.key ? `<button class="btn danger" type="button" data-act="clearKey">키 지우기</button>` : ""}
+        ${hasKey(gemini) ? `<button class="btn danger" type="button" data-act="clearKey">키 모두 지우기</button>` : ""}
       </div>`);
   }
 
@@ -1100,12 +1169,12 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       cards = cards.filter(x => x.id !== s.card.id); saveCards(); renderList(); closeSheet(); showToast("삭제했습니다");
     }
     else if (act === "saveSettings") {
-      saveGemini({ key: $("gKey").value.trim(), model: $("gModel").value.trim() || DEFAULT_MODEL });
-      if (gemini.key) { openSettings(); showToast("저장했습니다. 아래 안내대로 홈 화면에 추가해 주세요"); }
+      saveGemini({ key: $("gKey").value.trim(), model: $("gModel").value.trim() === DEFAULT_MODEL ? "" : $("gModel").value.trim(), groq: $("qKey").value.trim(), groqModel: $("qModel").value.trim() === DEFAULT_GROQ_MODEL ? "" : $("qModel").value.trim() });
+      if (hasKey(gemini)) { openSettings(); showToast("저장했습니다. 아래 안내대로 홈 화면에 추가해 주세요"); }
       else { closeSheet(); showToast("설정을 저장했습니다"); }
     }
     else if (act === "clearKey") {
-      saveGemini({ key: "", model: gemini.model || DEFAULT_MODEL }); closeSheet(); showToast("키를 지웠습니다");
+      saveGemini({ key: "", model: geminiModel(), groq: "", groqModel: "" }); closeSheet(); showToast("키를 지웠습니다");
     }
     else if (act === "copyKeyUrl") {
       try { await navigator.clipboard.writeText(keyHashUrl(gemini)); showToast("주소를 복사했습니다"); }
@@ -1131,7 +1200,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   window.__card = { findCardQuad, warpQuad, cardAspect };
   renderList();
   // 키가 있으면 주소에 담아 둠 (홈 화면 아이콘·북마크로 복구 가능)
-  if (gemini.key && !geminiFromHash()) { try { history.replaceState(null, "", keyHashUrl(gemini)); } catch {} }
+  if (hasKey(gemini) && !geminiFromHash()) { try { history.replaceState(null, "", keyHashUrl(gemini)); } catch {} }
 
   // localStorage가 비었으면 IndexedDB에서 복구
   (async () => {
@@ -1141,9 +1210,9 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     } else if (cards.length && !idbCards) {
       idb.set(KEY_CARDS, cards);
     }
-    if (!gemini.key && idbGem && idbGem.key) {
+    if (!hasKey(gemini) && hasKey(idbGem)) {
       saveGemini(idbGem);
-    } else if (gemini.key && !(idbGem && idbGem.key)) {
+    } else if (hasKey(gemini) && !hasKey(idbGem)) {
       idb.set(KEY_GEMINI, gemini);
     }
   })();
