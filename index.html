@@ -396,7 +396,10 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   }
 
   // ================= Gemini (선택) =================
-  async function readWithGemini(jpegBlob) {
+  // 생각(thinking)은 명함 옮겨 적기에 필요 없고 몇 초씩 걸리므로 최소로. 모델이 그 값을 안 받으면 다음 값으로 물러남
+  const THINK = ["minimal", "low", null];
+  let thinkIdx = 0;
+  async function readWithGemini(jpegBlob, signal) {
     const b64 = await new Promise((res, rej) => {
       const fr = new FileReader();
       fr.onload = () => res(String(fr.result).split(",")[1]);
@@ -411,17 +414,24 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       "칸에 넣지 못한 정보는 memo에 줄바꿈으로. 없는 항목은 빈 문자열. 인쇄된 글자만 옮기고 추측하지 마세요."
     ].join("\n");
     const model = (gemini.model || DEFAULT_MODEL).trim();
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": gemini.key.trim() },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0 }
-      })
-    });
-    if (!res.ok) {
+    let res;
+    for (;;) {
+      const level = THINK[thinkIdx];
+      // temperature는 기본값(1.0) 그대로: 제미나이 3은 낮추면 같은 말을 되풀이하며 느려질 수 있음
+      const generationConfig = { responseMimeType: "application/json" };
+      if (level) generationConfig.thinkingConfig = { thinkingLevel: level };
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: "POST", signal,
+        headers: { "Content-Type": "application/json", "x-goog-api-key": gemini.key.trim() },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }],
+          generationConfig
+        })
+      });
+      if (res.ok) break;
       let msg = "";
       try { msg = (await res.json())?.error?.message || ""; } catch {}
+      if (res.status === 400 && level && /think/i.test(msg)) { thinkIdx++; continue; }
       const e = new Error(msg || ("HTTP " + res.status)); e.status = res.status; throw e;
     }
     const data = await res.json();
@@ -477,15 +487,15 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     // 색 채널마다 흐리게 한 뒤 소벨 경사, 가장 센 채널을 씀 (배경과 명함이 밝기는 비슷하고 색만 다른 경우 대비)
     const ch = [0, 1, 2].map(c => { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = px[i * 4 + c]; blur3(a, w, h); blur3(a, w, h); return a; });
     const mag = new Float32Array(n), gxs = new Float32Array(n), gys = new Float32Array(n);
-    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x; let best = 0, bx = 0, by = 0;
-      for (const a of ch) {
-        const gx = a[i - w + 1] + 2 * a[i + 1] + a[i + w + 1] - a[i - w - 1] - 2 * a[i - 1] - a[i + w - 1];
-        const gy = a[i + w - 1] + 2 * a[i + w] + a[i + w + 1] - a[i - w - 1] - 2 * a[i - w] - a[i - w + 1];
-        const m = gx * gx + gy * gy;
-        if (m > best) { best = m; bx = gx; by = gy; }
-      }
-      mag[i] = Math.sqrt(best); gxs[i] = bx; gys[i] = by;
+    const sobel = (a, i) => {
+      const gx = a[i - w + 1] + 2 * a[i + 1] + a[i + w + 1] - a[i - w - 1] - 2 * a[i - 1] - a[i + w - 1];
+      const gy = a[i + w - 1] + 2 * a[i + w] + a[i + w + 1] - a[i - w - 1] - 2 * a[i - w] - a[i - w + 1];
+      const m = gx * gx + gy * gy;
+      if (m > mag[i]) { mag[i] = m; gxs[i] = gx; gys[i] = gy; }
+    };
+    for (let y = 1; y < h - 1; y++) for (let x = 1, i = y * w + 1; x < w - 1; x++, i++) {
+      sobel(ch[0], i); sobel(ch[1], i); sobel(ch[2], i);
+      mag[i] = Math.sqrt(mag[i]);
     }
     // 경사 방향으로 가늘게(비최대 억제) + 문턱값
     const T = 16, edge = new Uint8Array(n);
@@ -553,10 +563,19 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     };
     const pairs = [];
     for (let i = 0; i < lines.length; i++) for (let j = i + 1; j < lines.length; j++)
-      if (angDiff(lines[i], lines[j]) < 40 * Math.PI / 180 && rhoDiff(lines[i], lines[j]) > 0.15 * Math.min(w, h)) pairs.push([lines[i], lines[j]]);
+      if (angDiff(lines[i], lines[j]) < 40 * Math.PI / 180 && rhoDiff(lines[i], lines[j]) > 0.15 * Math.min(w, h)) pairs.push([i, j]);
+    // 한 변은 (그 변의 직선, 양 끝을 자르는 두 직선)으로 정해지므로 여러 사각형이 같은 변을 공유 → 계산 결과를 재사용
+    const sideCache = new Map();
+    const side = (l, m1, m2, p, q) => {
+      const key = (l * 32 + Math.min(m1, m2)) * 32 + Math.max(m1, m2);
+      let v = sideCache.get(key);
+      if (!v) sideCache.set(key, v = support(p, q));
+      return v;
+    };
     const cands = [];
     for (let i = 0; i < pairs.length; i++) for (let j = i + 1; j < pairs.length; j++) {
-      const [a, b] = pairs[i], [c, e] = pairs[j];
+      const [ia, ib] = pairs[i], [ic, ie] = pairs[j];
+      const a = lines[ia], b = lines[ib], c = lines[ic], e = lines[ie];
       if ([[a, c], [a, e], [b, c], [b, e]].some(([l, m]) => angDiff(l, m) < 50 * Math.PI / 180)) continue;
       const q = [meet(a, c), meet(a, e), meet(b, e), meet(b, c)];
       if (q.some(([x, y]) => !(x > -0.02 * w && x < 1.02 * w && y > -0.02 * h && y < 1.02 * h))) continue;
@@ -564,8 +583,13 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       for (let k = 0; k < 4; k++) area += q[k][0] * q[(k + 1) % 4][1] - q[(k + 1) % 4][0] * q[k][1];
       area = Math.abs(area) / 2;
       if (area < 0.08 * w * h) continue;
-      const sup = q.map((p, k) => support(p, q[(k + 1) % 4]));
-      if (Math.min(...sup.map(x => x.f)) < 0.3) continue;
+      const ends = [[ia, ic, ie], [ie, ia, ib], [ib, ie, ic], [ic, ib, ia]], sup = [];
+      for (let k = 0; k < 4; k++) {
+        const v = side(...ends[k], q[k], q[(k + 1) % 4]);
+        if (v.f < 0.3) break;
+        sup.push(v);
+      }
+      if (sup.length < 4) continue;
       const score = sup.reduce((x, y) => x + y.f, 0) / 4, strength = sup.reduce((x, y) => x + y.m, 0) / 4;
       cands.push({ q, area, score, rank: score * Math.sqrt(strength) * Math.pow(area, 0.1) });
     }
@@ -617,11 +641,14 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       const v = (y + 0.5) / oh;
       for (let x = 0; x < ow; x++) {
         const u = (x + 0.5) / ow, z = g * u + hh * v + 1;
-        const sx = Math.min(SW - 1.001, Math.max(0, (a * u + b * v + x0) / z - 0.5));
-        const sy = Math.min(SH - 1.001, Math.max(0, (d * u + e * v + y0) / z - 0.5));
-        const xi = sx | 0, yi = sy | 0, fx = sx - xi, fy = sy - yi, i = (yi * SW + xi) * 4, j = (y * ow + x) * 4, i2 = i + SW * 4;
-        for (let k = 0; k < 3; k++)
-          o[j + k] = (sd[i + k] * (1 - fx) + sd[i + 4 + k] * fx) * (1 - fy) + (sd[i2 + k] * (1 - fx) + sd[i2 + 4 + k] * fx) * fy;
+        let sx = (a * u + b * v + x0) / z - 0.5, sy = (d * u + e * v + y0) / z - 0.5;
+        if (sx < 0) sx = 0; else if (sx > SW - 1.001) sx = SW - 1.001;
+        if (sy < 0) sy = 0; else if (sy > SH - 1.001) sy = SH - 1.001;
+        const xi = sx | 0, yi = sy | 0, fx = sx - xi, fy = sy - yi, i = (yi * SW + xi) << 2, i2 = i + (SW << 2), j = (y * ow + x) << 2;
+        const w00 = (1 - fx) * (1 - fy), w01 = fx * (1 - fy), w10 = (1 - fx) * fy, w11 = fx * fy;
+        o[j] = sd[i] * w00 + sd[i + 4] * w01 + sd[i2] * w10 + sd[i2 + 4] * w11;
+        o[j + 1] = sd[i + 1] * w00 + sd[i + 5] * w01 + sd[i2 + 1] * w10 + sd[i2 + 5] * w11;
+        o[j + 2] = sd[i + 2] * w00 + sd[i + 6] * w01 + sd[i2 + 2] * w10 + sd[i2 + 6] * w11;
         o[j + 3] = 255;
       }
     }
@@ -852,7 +879,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const q = await cropDialog(src, quad);
     if (q === undefined || sheet !== s) return;
     s.src = src; s.quad = q;
-    setPhoto(s, q ? warpQuad(src, q, 1600) : src);
+    setPhoto(s, q ? warpQuad(src, q, 1200) : src);
   }
 
   function fillFields(parsed, overwriteAll) {
@@ -888,16 +915,31 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     URL.revokeObjectURL(loaded.url);
     let found = null;
     try { found = findCardQuad(src); } catch {}
-    const quad = await cropDialog(src, found);
-    if (quad === undefined || sheet !== s) return;
+    const read = (canvas) => {
+      const ac = new AbortController();
+      const p = new Promise(r => canvas.toBlob(r, "image/jpeg", 0.85)).then(b => readWithGemini(b, ac.signal));
+      p.catch(() => {});
+      return { ac, p };
+    };
+    const dialog = cropDialog(src, found);
+    // 모서리를 맞추는 동안 자동으로 찾은 영역(못 찾았으면 사진 전체)을 미리 제미나이에 보냄
+    let pre = null;
+    if (gemini.key) {
+      await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+      pre = read(found ? warpQuad(src, found, 1200) : drawScaled(src, 1200));
+    }
+    const quad = await dialog;
+    if (quad === undefined || sheet !== s) { pre?.ac.abort(); return; }
     s.src = src; s.quad = quad;
-    const big = quad ? warpQuad(src, quad, 1600) : drawScaled(src, 1600);
+    const big = quad ? warpQuad(src, quad, 1200) : drawScaled(src, 1200);
     setPhoto(s, big);
     if (!gemini.key) { setStatus("사진을 첨부했습니다. 글자는 위 칸에서 텍스트 스캔으로 넣어 주세요."); return; }
+    // 자동 영역이 틀려 모서리를 크게 옮겼으면 새로 자른 사진으로 다시 읽음
+    const far = found && quad && quad.some((p, i) => Math.hypot(p[0] - found[i][0], p[1] - found[i][1]) > 0.04 * Math.hypot(src.width, src.height));
+    if (far) { pre.ac.abort(); pre = read(big); }
     setStatus("제미나이가 명함을 읽고 있습니다…", "busy");
     try {
-      const blob = await new Promise(r => big.toBlob(r, "image/jpeg", 0.85));
-      const result = await readWithGemini(blob);
+      const result = await pre.p;
       if (sheet !== s) return;
       const n = fillFields(result || {}, false);
       setStatus(n ? "제미나이가 칸을 채웠습니다. 틀린 곳을 고친 뒤 저장하세요." : "글자를 찾지 못했습니다. 텍스트 스캔을 이용해 주세요.");

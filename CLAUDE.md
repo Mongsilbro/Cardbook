@@ -22,6 +22,9 @@
   전화: `010`대는 휴대폰, 라벨에 fax/팩스/F면 팩스, 나머지 사무실. `+82`는 `0`으로 정규화.
 - **Gemini (선택)**: 키가 있으면 사진을 `generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`로
   보내 JSON 응답(`responseMimeType: application/json`) 받음. 기본 모델 `gemini-3.6-flash` (2026-10 기준 무료 티어 있음).
+  속도: 명함 영역 화면이 떠 있는 동안 자동으로 찾은 영역(1200px)을 미리 보냄 → 완료 누를 때쯤 결과가 와 있음.
+  모서리를 이미지 대각선의 4% 넘게 옮기면 취소하고 새로 자른 사진으로 다시 보냄. `thinkingLevel`은 minimal→low→없음 순으로
+  모델이 받아 주는 값으로 물러남(세션 동안 기억). temperature는 기본값(제미나이 3은 낮추면 반복·지연 위험).
 - **명함 영역 찾기·펴기** (`findCardQuad`, `warpQuad`, `cropDialog`): 사진을 넣으면 400px로 줄여 색 채널별 소벨 경사 →
   경사 세기로 가중한 허프 변환으로 직선을 찾고, 직선 4개가 이루는 사각형 중 테두리가 이어지고 대비가 센 것을 고름
   (같은 각도 직선은 5개까지만 — 나뭇결 배경 대비). 모서리 4개를 끌어 고치는 화면(돋보기 포함)을 거쳐 원근을 펴서 명함만 남김.
