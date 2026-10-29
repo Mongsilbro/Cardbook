@@ -1,0 +1,59 @@
+# 명함첩 (cardbook)
+
+아이폰에서 명함을 스캔해 보관하고 아이폰 연락처에 저장하는 개인용 웹앱.
+사용자는 Mac이 없어서 네이티브 앱 대신 **GitHub Pages에 올린 정적 웹앱**을 Safari(또는 크롬)에서 열고
+홈 화면에 추가해 쓴다. 답변·UI 문구는 모두 한국어.
+
+## 구조
+
+| 경로 | 내용 |
+|---|---|
+| `index.html` | 앱 전체 (HTML·CSS·JS 한 파일, 빌드 단계 없음) |
+| `manifest.webmanifest`, `apple-touch-icon.png`, `icon-512.png` | 홈 화면 아이콘·이름 |
+| `tests/parser.test.mjs` | 명함 텍스트 분류기 회귀 테스트 (`node tests/parser.test.mjs`) |
+| `ios/` | 초기에 만든 SwiftUI 네이티브 앱 (Vision OCR, Contacts). Mac이 없어 **현재 사용하지 않음**. 참고용 |
+
+`index.html` 스크립트 구획 (주석 `// ===== ... =====`로 구분):
+- **storage**: 명함은 `localStorage("cardbook.cards.v1")` + IndexedDB(`cardbook`/`kv`) 이중 저장, 한쪽이 비면 복구.
+  제미나이 설정은 `localStorage("cardbook.gemini.v1")` + IndexedDB + 쿠키 `cbk` + **URL 해시 `#k=<base64url JSON>`**.
+  해시는 홈 화면 아이콘 URL에 키를 담아 저장소가 지워져도 복구하려는 목적. `navigator.storage.persist()` 요청.
+- **parser** (`parseCardText`): 줄 단위 규칙 기반 분류. 정규식(이메일·전화·웹·주소), 직함 사전 `TITLES`,
+  성씨 `SURNAMES`, 회사 키워드 `COMPANY_WORDS`. 분류 못 한 줄은 `memo`로. `ios/.../CardParser.swift`를 JS로 옮긴 것.
+  전화: `010`대는 휴대폰, 라벨에 fax/팩스/F면 팩스, 나머지 사무실. `+82`는 `0`으로 정규화.
+- **Gemini (선택)**: 키가 있으면 사진을 `generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`로
+  보내 JSON 응답(`responseMimeType: application/json`) 받음. 기본 모델 `gemini-3.6-flash` (2026-10 기준 무료 티어 있음).
+- **vCard**: `toVCard()`로 3.0 vCard 생성 → `<a download>`로 `.vcf` 내려받기 → iOS Safari가 연락처 추가 화면을 띄움.
+- **UI**: 목록(검색) → 시트(새 명함/편집/상세/설정/백업). 새 명함 화면의 텍스트 칸은 iOS **텍스트 스캔(Live Text)**으로
+  입력받아 350ms 디바운스 후 자동 분류. 사용자가 직접 고친 칸(`sheet.dirty`)은 자동 채우기가 덮어쓰지 않음.
+
+## 지켜야 할 것
+
+- 외부 라이브러리·빌드 도구 없이 `index.html` 한 파일 유지 (사용자가 GitHub 웹에서 파일 올려 배포).
+- 개인정보(명함)는 기기에만 저장. 서버로 보내는 건 사용자가 키를 넣은 제미나이 호출뿐.
+- 입력칸 글자 크기 16px 이상 (iOS 자동 확대 방지), safe-area inset 유지.
+- 라이트/다크 모드 모두 `:root` 토큰으로 처리.
+- 분류 규칙을 바꾸면 `tests/parser.test.mjs`에 사례를 추가하고 통과 확인.
+
+## 테스트
+
+- 분류기: `node tests/parser.test.mjs`
+- 화면·저장: `python3 -m http.server` 후 Playwright로 열어 확인 (설정 저장 → 저장소 삭제 → 복구 등).
+- iOS 전용 동작(텍스트 스캔, .vcf → 연락처 화면, 홈 화면 앱)은 자동 테스트 불가 → 사용자에게 확인 요청.
+
+## 배포
+
+GitHub 저장소 루트에 파일을 두고 Settings → Pages → `main` / root. 주소 `https://<아이디>.github.io/<저장소>/`.
+push 권한이 있으면 커밋·푸시하면 1~2분 뒤 반영된다고 사용자에게 알리기.
+
+## 지금까지의 결정 (배경)
+
+- Claude 아티팩트 버전도 만들었으나: .vcf 다운로드가 막히고, 자동 인식이 Claude 사용량을 써서 사용자가 원치 않음 → 웹앱으로 이전.
+- 네이티브 iOS 앱(`ios/`)은 Mac·서명 문제로 보류. Mac을 쓰게 되면 `ios/`를 Xcode로 빌드하는 것이 가장 완성도 높은 길.
+- 크롬(iOS)도 같은 WebKit이라 동작하지만 저장소가 브라우저별로 분리됨. 연락처 저장은 Safari가 더 매끄러움.
+
+## 추가 기능 후보 (사용자 요청 시)
+
+- 명함 앞/뒷면 2장 보관, 태그·만난 날짜
+- CSV(엑셀) 내보내기
+- 중복 명함 감지(전화·이메일 기준)
+- 분류 정확도 개선: 실제 명함에서 틀린 사례를 받아 테스트에 추가하며 규칙 보강
