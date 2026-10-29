@@ -366,6 +366,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       if (!/[가-힣]/.test(r) && r.split(" ").length <= 6 && P.engTitle.test(r)) { if (!d.jobTitle) d.jobTitle = r; else left.push(raw); continue; }
       const en = englishName(r);
       if (en) { engNames.push(en); continue; }
+      if (/\s/.test(r) && /(다|요|니다)[.!~]?$/.test(r)) { left.push(raw); continue; } // 문장(슬로건 등)은 통째로 메모
       const unknown = []; let any = false;
       for (const tok of r.split(SEP).filter(Boolean)) {
         if (isDepartment(tok) && !d.department) { d.department = tok; any = true; }
