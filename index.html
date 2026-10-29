@@ -129,6 +129,18 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 .stack { display: grid; gap: 10px; }
 .foot { font-size: 12px; color: var(--muted); text-align: center; }
 .settings .field input { font-family: var(--font-mono); font-size: 14px; }
+.photobox { display: grid; gap: 2px; }
+.photobox .linkbtn { justify-self: center; font-size: 14px; }
+.crop { position: fixed; inset: 0; z-index: 30; background: var(--bg); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.crop-area { flex: 1; min-height: 0; display: grid; place-items: center; padding: 24px max(24px, env(safe-area-inset-left, 0px)) 24px max(24px, env(safe-area-inset-right, 0px)); }
+.crop-fit { position: relative; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.crop-img, .crop-fit > svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.crop-dim { fill: rgba(0, 0, 0, .5); }
+.crop-edge { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.handle { position: absolute; width: 48px; height: 48px; margin: -24px 0 0 -24px; touch-action: none; cursor: grab; }
+.handle::after { content: ""; position: absolute; inset: 13px; border-radius: 50%; background: var(--surface); border: 3px solid var(--accent); box-shadow: 0 1px 4px rgba(0, 0, 0, .45); }
+.loupe { position: absolute; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 50%; border: 3px solid var(--surface); box-shadow: 0 2px 10px rgba(0, 0, 0, .5); pointer-events: none; background: #000; }
+.crop-foot { width: 100%; max-width: 680px; margin: 0 auto; display: grid; gap: 10px; padding: 0 max(16px, env(safe-area-inset-right, 0px)) 16px max(16px, env(safe-area-inset-left, 0px)); text-align: center; }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); z-index: 40; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: 14px; max-width: calc(100% - 32px); text-align: center; }
 </style>
 </head>
@@ -155,6 +167,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 </div>
 
 <div class="sheet" id="sheet" hidden></div>
+<div class="crop" id="crop" hidden></div>
 <div class="toast" id="toast" hidden></div>
 
 <script>
@@ -427,11 +440,193 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     });
   }
   function drawScaled(img, maxSide) {
-    const s = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    const s = Math.min(1, maxSide / Math.max(iw, ih));
     const cv = document.createElement("canvas");
-    cv.width = Math.round(img.naturalWidth * s); cv.height = Math.round(img.naturalHeight * s);
+    cv.width = Math.round(iw * s); cv.height = Math.round(ih * s);
     cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
     return cv;
+  }
+
+  // ================= 명함 영역 찾기 · 펴기 (배경 지우기) =================
+  // 사진을 작게 줄여 경계선을 구하고, 직선(허프 변환) 중 네 개가 이루는 사각형 가운데 테두리가 가장 뚜렷한 것을 고른다.
+  function orderCorners(pts) { // → [왼위, 오위, 오아래, 왼아래]
+    const cx = pts.reduce((a, p) => a + p[0], 0) / 4, cy = pts.reduce((a, p) => a + p[1], 0) / 4;
+    const s = pts.slice().sort((p, q) => Math.atan2(p[1] - cy, p[0] - cx) - Math.atan2(q[1] - cy, q[0] - cx));
+    const k = s.reduce((bi, p, i) => p[0] + p[1] < s[bi][0] + s[bi][1] ? i : bi, 0);
+    return [0, 1, 2, 3].map(i => s[(k + i) % 4]);
+  }
+  function blur3(a, w, h) {
+    const t = new Float32Array(a.length);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      t[i] = (a[x > 0 ? i - 1 : i] + a[i] + a[x < w - 1 ? i + 1 : i]) / 3;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      a[i] = (t[y > 0 ? i - w : i] + t[i] + t[y < h - 1 ? i + w : i]) / 3;
+    }
+  }
+  function findCardQuad(src) {
+    const sc = Math.min(1, 400 / Math.max(src.width, src.height));
+    const w = Math.round(src.width * sc), h = Math.round(src.height * sc), n = w * h;
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    const cx = cv.getContext("2d", { willReadFrequently: true });
+    cx.drawImage(src, 0, 0, w, h);
+    const px = cx.getImageData(0, 0, w, h).data;
+    // 색 채널마다 흐리게 한 뒤 소벨 경사, 가장 센 채널을 씀 (배경과 명함이 밝기는 비슷하고 색만 다른 경우 대비)
+    const ch = [0, 1, 2].map(c => { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = px[i * 4 + c]; blur3(a, w, h); blur3(a, w, h); return a; });
+    const mag = new Float32Array(n), gxs = new Float32Array(n), gys = new Float32Array(n);
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x; let best = 0, bx = 0, by = 0;
+      for (const a of ch) {
+        const gx = a[i - w + 1] + 2 * a[i + 1] + a[i + w + 1] - a[i - w - 1] - 2 * a[i - 1] - a[i + w - 1];
+        const gy = a[i + w - 1] + 2 * a[i + w] + a[i + w + 1] - a[i - w - 1] - 2 * a[i - w] - a[i - w + 1];
+        const m = gx * gx + gy * gy;
+        if (m > best) { best = m; bx = gx; by = gy; }
+      }
+      mag[i] = Math.sqrt(best); gxs[i] = bx; gys[i] = by;
+    }
+    // 경사 방향으로 가늘게(비최대 억제) + 문턱값
+    const T = 16, edge = new Uint8Array(n);
+    for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+      const i = y * w + x, m = mag[i]; if (m < T) continue;
+      const ax = Math.abs(gxs[i]), ay = Math.abs(gys[i]);
+      const o = ay < ax * 0.414 ? 1 : ax < ay * 0.414 ? w : (gxs[i] * gys[i] > 0 ? w + 1 : w - 1);
+      if (m >= mag[i - o] && m >= mag[i + o]) edge[i] = 1;
+    }
+    // 허프 변환: 각 점은 자기 경사 방향 근처 각도에만, 경사 세기만큼 투표 (약한 무늬보다 뚜렷한 가장자리가 이김)
+    const NT = 180, diag = Math.ceil(Math.hypot(w, h)), NR = 2 * diag + 1;
+    const COS = [], SIN = [];
+    for (let t = 0; t < NT; t++) { COS.push(Math.cos(t * Math.PI / NT)); SIN.push(Math.sin(t * Math.PI / NT)); }
+    const acc = new Float32Array(NT * NR);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x; if (!edge[i]) continue;
+      const t0 = Math.round(Math.atan2(gys[i], gxs[i]) * 180 / Math.PI);
+      for (let k = -3; k <= 3; k++) {
+        const t = (((t0 + k) % 180) + 180) % 180;
+        acc[t * NR + Math.round(x * COS[t] + y * SIN[t]) + diag] += mag[i];
+      }
+    }
+    const minV = 0.12 * Math.min(w, h) * 24, peaks = [];
+    for (let t = 0; t < NT; t++) for (let r = 0; r < NR; r++) {
+      const v = acc[t * NR + r]; if (v < minV) continue;
+      let isMax = true;
+      for (let dt = -3; dt <= 3 && isMax; dt++) {
+        let tt = t + dt, rr = r;
+        if (tt < 0 || tt >= NT) { tt = (tt + NT) % NT; rr = 2 * diag - r; }
+        for (let dr = -4; dr <= 4; dr++) {
+          const r2 = rr + dr; if ((dt || dr) && r2 >= 0 && r2 < NR && acc[tt * NR + r2] > v) { isMax = false; break; }
+        }
+      }
+      if (isMax) peaks.push({ th: t * Math.PI / NT, r: r - diag, v });
+    }
+    peaks.sort((a, b) => b.v - a.v);
+    const angDiff = (a, b) => { const d = Math.abs(a.th - b.th); return Math.min(d, Math.PI - d); };
+    const rhoDiff = (a, b) => Math.abs(a.r - (Math.abs(a.th - b.th) > Math.PI / 2 ? -b.r : b.r));
+    // 나뭇결·줄무늬 배경이 같은 방향 직선만 잔뜩 내놓지 않도록 비슷한 각도는 5개까지만
+    const lines = [];
+    for (const p of peaks) {
+      if (lines.length >= 24) break;
+      if (lines.some(l => angDiff(l, p) < 5 * Math.PI / 180 && rhoDiff(l, p) < 6)) continue;
+      if (lines.filter(l => angDiff(l, p) < 8 * Math.PI / 180).length >= 5) continue;
+      lines.push(p);
+    }
+    const meet = (a, b) => {
+      const ca = Math.cos(a.th), sa = Math.sin(a.th), cb = Math.cos(b.th), sb = Math.sin(b.th), det = ca * sb - sa * cb;
+      return [(a.r * sb - sa * b.r) / det, (ca * b.r - a.r * cb) / det];
+    };
+    // 변 위의 점들이 실제 경계선(방향까지 맞는)에 얼마나 붙어 있는지. 둥근 모서리 대비 양 끝 10%는 뺀다
+    const support = (p, q) => {
+      const len = Math.hypot(q[0] - p[0], q[1] - p[1]), ux = (q[0] - p[0]) / len, uy = (q[1] - p[1]) / len;
+      let hit = 0, tot = 0, sum = 0;
+      for (let s = len * 0.1; s <= len * 0.9; s += 1) {
+        const x = p[0] + ux * s, y = p[1] + uy * s; tot++;
+        for (let o = -1.5; o <= 1.5; o += 1) {
+          const xi = Math.round(x - uy * o), yi = Math.round(y + ux * o);
+          if (xi < 0 || yi < 0 || xi >= w || yi >= h) continue;
+          const i = yi * w + xi;
+          if (edge[i] && Math.abs(gxs[i] * uy - gys[i] * ux) > 0.9 * mag[i]) { hit++; sum += mag[i]; break; }
+        }
+      }
+      return { f: tot ? hit / tot : 0, m: hit ? sum / hit : 0 };
+    };
+    const pairs = [];
+    for (let i = 0; i < lines.length; i++) for (let j = i + 1; j < lines.length; j++)
+      if (angDiff(lines[i], lines[j]) < 40 * Math.PI / 180 && rhoDiff(lines[i], lines[j]) > 0.15 * Math.min(w, h)) pairs.push([lines[i], lines[j]]);
+    const cands = [];
+    for (let i = 0; i < pairs.length; i++) for (let j = i + 1; j < pairs.length; j++) {
+      const [a, b] = pairs[i], [c, e] = pairs[j];
+      if ([[a, c], [a, e], [b, c], [b, e]].some(([l, m]) => angDiff(l, m) < 50 * Math.PI / 180)) continue;
+      const q = [meet(a, c), meet(a, e), meet(b, e), meet(b, c)];
+      if (q.some(([x, y]) => !(x > -0.02 * w && x < 1.02 * w && y > -0.02 * h && y < 1.02 * h))) continue;
+      let area = 0;
+      for (let k = 0; k < 4; k++) area += q[k][0] * q[(k + 1) % 4][1] - q[(k + 1) % 4][0] * q[k][1];
+      area = Math.abs(area) / 2;
+      if (area < 0.08 * w * h) continue;
+      const sup = q.map((p, k) => support(p, q[(k + 1) % 4]));
+      if (Math.min(...sup.map(x => x.f)) < 0.3) continue;
+      const score = sup.reduce((x, y) => x + y.f, 0) / 4, strength = sup.reduce((x, y) => x + y.m, 0) / 4;
+      cands.push({ q, area, score, rank: score * Math.sqrt(strength) * Math.pow(area, 0.1) });
+    }
+    if (!cands.length) return null;
+    // 테두리가 끊김 없이 이어지고(score) 대비가 센(strength) 사각형. 나뭇결처럼 약한 무늬 선보다 명함 가장자리가 이김
+    const best = cands.filter(c => c.score >= 0.5).sort((a, b) => b.rank - a.rank)[0];
+    if (!best) return null;
+    // 경계선 위치 오차로 배경이 실처럼 남지 않게 중심 쪽으로 1.5% 당김
+    const mx = best.q.reduce((t, p) => t + p[0], 0) / 4, my = best.q.reduce((t, p) => t + p[1], 0) / 4;
+    return orderCorners(best.q.map(([x, y]) => [x + (mx - x) * 0.015, y + (my - y) * 0.015])
+      .map(([x, y]) => [Math.min(src.width, Math.max(0, x / sc)), Math.min(src.height, Math.max(0, y / sc))]));
+  }
+  // 원근 때문에 사다리꼴로 찍힌 명함의 실제 가로세로비 (Zhang & He, 초점거리 모름 가정). 이상하면 변 길이 평균으로
+  function cardAspect(q, W, H) {
+    const [tl, tr, br, bl] = q.map(([x, y]) => [x - W / 2, y - H / 2, 1]);
+    const len = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const naive = (len(tl, tr) + len(bl, br)) / (len(tl, bl) + len(tr, br));
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const c14 = cross(tl, br);
+    const k2 = dot(c14, bl) / dot(cross(tr, br), bl), k3 = dot(c14, tr) / dot(cross(bl, br), tr);
+    const n2 = tr.map((v, i) => k2 * v - tl[i]), n3 = bl.map((v, i) => k3 * v - tl[i]);
+    const f2 = -(n2[0] * n3[0] + n2[1] * n3[1]) / (n2[2] * n3[2]);
+    let r = naive;
+    if (f2 > 0 && isFinite(f2) && Math.sqrt(f2) > 0.3 * Math.max(W, H) && Math.sqrt(f2) < 5 * Math.max(W, H)) {
+      const e = Math.sqrt((n2[0] ** 2 + n2[1] ** 2 + f2 * n2[2] ** 2) / (n3[0] ** 2 + n3[1] ** 2 + f2 * n3[2] ** 2));
+      if (e / naive > 0.6 && e / naive < 1.6) r = e;
+    }
+    // 모서리 몇 픽셀 오차에도 추정이 크게 흔들리므로, 한국 표준 90×50mm(1.8)에 가까우면 맞춤. 1.69 아래는 86×54mm(카드형) 쪽으로 보고 그대로
+    const near = (x) => x >= 1.69 && x <= 2.04;
+    if (near(r)) r = 1.8; else if (near(1 / r)) r = 1 / 1.8;
+    return r;
+  }
+  function warpQuad(src, q, maxSide) {
+    const r = cardAspect(q, src.width, src.height);
+    const side = Math.max(...q.map((p, i) => Math.hypot(p[0] - q[(i + 1) % 4][0], p[1] - q[(i + 1) % 4][1])));
+    const L = Math.max(16, Math.min(maxSide, Math.round(side)));
+    const ow = r >= 1 ? L : Math.round(L * r), oh = r >= 1 ? Math.round(L / r) : L;
+    // 단위 정사각형 → 사각형 사영변환 (Heckbert)
+    const [[x0, y0], [x1, y1], [x2, y2], [x3, y3]] = q;
+    const dx1 = x1 - x2, dx2 = x3 - x2, dx3 = x0 - x1 + x2 - x3, dy1 = y1 - y2, dy2 = y3 - y2, dy3 = y0 - y1 + y2 - y3;
+    const den = dx1 * dy2 - dx2 * dy1;
+    const g = (dx3 * dy2 - dx2 * dy3) / den, hh = (dx1 * dy3 - dx3 * dy1) / den;
+    const a = x1 - x0 + g * x1, b = x3 - x0 + hh * x3, d = y1 - y0 + g * y1, e = y3 - y0 + hh * y3;
+    const SW = src.width, SH = src.height, sd = src.getContext("2d").getImageData(0, 0, SW, SH).data;
+    const out = document.createElement("canvas"); out.width = ow; out.height = oh;
+    const oc = out.getContext("2d"), od = oc.createImageData(ow, oh), o = od.data;
+    for (let y = 0; y < oh; y++) {
+      const v = (y + 0.5) / oh;
+      for (let x = 0; x < ow; x++) {
+        const u = (x + 0.5) / ow, z = g * u + hh * v + 1;
+        const sx = Math.min(SW - 1.001, Math.max(0, (a * u + b * v + x0) / z - 0.5));
+        const sy = Math.min(SH - 1.001, Math.max(0, (d * u + e * v + y0) / z - 0.5));
+        const xi = sx | 0, yi = sy | 0, fx = sx - xi, fy = sy - yi, i = (yi * SW + xi) * 4, j = (y * ow + x) * 4, i2 = i + SW * 4;
+        for (let k = 0; k < 3; k++)
+          o[j + k] = (sd[i + k] * (1 - fx) + sd[i + 4 + k] * fx) * (1 - fy) + (sd[i2 + k] * (1 - fx) + sd[i2 + 4 + k] * fx) * fy;
+        o[j + 3] = 255;
+      }
+    }
+    oc.putImageData(od, 0, 0);
+    return out;
   }
 
   // ================= vCard → 아이폰 연락처 =================
@@ -548,7 +743,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           </div>
           <div id="readStatus"></div>
         </div>` : ""}
-        <div id="photoBox">${card.thumb ? `<div class="photo"><img src="${esc(card.thumb)}" alt="명함 사진"></div>` : ""}</div>
+        <div id="photoBox" class="photobox">${photoHtml(card.thumb)}</div>
         <div><p class="group-title">기본 정보</p><div class="group">
           ${f("name","이름")}${f("company","회사")}${f("department","부서")}${f("jobTitle","직함")}
         </div></div>
@@ -570,6 +765,94 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       scan.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => fillFromText(scan.value), 350); });
     }
     $("photoIn")?.addEventListener("change", onPhoto);
+  }
+
+  const photoHtml = (thumb) => thumb ? `<div class="photo"><img src="${esc(thumb)}" alt="명함 사진"></div><button class="linkbtn" type="button" data-act="recrop">명함 영역 다시 맞추기</button>` : "";
+  function setPhoto(s, canvas) {
+    s.card.thumb = drawScaled(canvas, 720).toDataURL("image/jpeg", 0.7);
+    if (sheet === s) $("photoBox").innerHTML = photoHtml(s.card.thumb);
+  }
+
+  // 모서리 4개를 끌어 명함 영역을 맞추는 화면. 결과: 사각형(자르기) / null(원본 그대로) / undefined(취소)
+  function cropDialog(src, quad) {
+    return new Promise(resolve => {
+      const el = $("crop"), W = src.width, H = src.height;
+      const pts = (quad || [[0, 0], [W, 0], [W, H], [0, H]]).map(p => p.slice());
+      const view = drawScaled(src, 1400);
+      el.innerHTML = `
+        ${bar(`<button class="linkbtn" type="button" data-c="cancel">취소</button>`, "명함 영역", `<button class="linkbtn strong" type="button" data-c="ok">완료</button>`)}
+        <div class="crop-area" id="cropArea"><div class="crop-fit" id="cropFit">
+          <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><path class="crop-dim" fill-rule="evenodd"/><polygon class="crop-edge"/></svg>
+          ${[0, 1, 2, 3].map(i => `<div class="handle" data-i="${i}" aria-label="모서리 ${i + 1}"></div>`).join("")}
+          <canvas class="loupe" width="224" height="224" hidden></canvas>
+        </div></div>
+        <div class="crop-foot">
+          <p class="note">${quad ? "명함 테두리를 찾았습니다. 어긋난 모서리는 끌어서 맞추세요." : "테두리를 찾지 못했습니다. 네 모서리를 명함 귀퉁이로 끌어 주세요."}</p>
+          <button class="btn" type="button" data-c="orig">자르지 않고 원본 사용</button>
+        </div>`;
+      const fit = $("cropFit"), area = $("cropArea"), loupe = fit.querySelector(".loupe"), lc = loupe.getContext("2d");
+      view.className = "crop-img"; fit.prepend(view);
+      el.hidden = false;
+      const layout = () => {
+        const cs = getComputedStyle(area);
+        const aw = area.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+        const ah = area.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+        const fw = Math.max(40, Math.min(aw, ah * W / H));
+        fit.style.width = fw + "px"; fit.style.height = fw * H / W + "px";
+      };
+      const draw = () => {
+        const poly = pts.map(p => p.join(",")).join(" ");
+        fit.querySelector(".crop-edge").setAttribute("points", poly);
+        fit.querySelector(".crop-dim").setAttribute("d", `M0 0H${W}V${H}H0Z M${pts.map(p => p.join(" ")).join(" L")}Z`);
+        fit.querySelectorAll(".handle").forEach((hd, i) => { hd.style.left = pts[i][0] / W * 100 + "%"; hd.style.top = pts[i][1] / H * 100 + "%"; });
+      };
+      // 손가락에 가린 모서리를 확대해 보여 줌
+      const showLoupe = (p) => {
+        const k = view.width / W, z = 3, r = 112 / 2 / z / (fit.clientWidth / view.width);
+        lc.fillStyle = "#000"; lc.fillRect(0, 0, 224, 224);
+        lc.drawImage(view, p[0] * k - r, p[1] * k - r, r * 2, r * 2, 0, 0, 224, 224);
+        lc.strokeStyle = "#fff"; lc.lineWidth = 2; lc.beginPath(); lc.moveTo(112, 92); lc.lineTo(112, 132); lc.moveTo(92, 112); lc.lineTo(132, 112); lc.stroke();
+        const left = p[0] / W * fit.clientWidth, top = p[1] / H * fit.clientHeight, ox = fit.getBoundingClientRect().left;
+        loupe.style.left = Math.min(innerWidth - ox - 60, Math.max(60 - ox, left)) + "px"; loupe.style.top = (top > 140 ? top - 100 : top + 100) + "px"; loupe.hidden = false;
+      };
+      let drag = null;
+      fit.addEventListener("pointerdown", (e) => {
+        const hd = e.target.closest(".handle"); if (!hd) return;
+        e.preventDefault(); hd.setPointerCapture(e.pointerId);
+        const i = +hd.dataset.i, rc = fit.getBoundingClientRect();
+        drag = { i, id: e.pointerId, dx: pts[i][0] - (e.clientX - rc.left) / rc.width * W, dy: pts[i][1] - (e.clientY - rc.top) / rc.height * H };
+        showLoupe(pts[i]);
+      });
+      fit.addEventListener("pointermove", (e) => {
+        if (!drag || e.pointerId !== drag.id) return;
+        const rc = fit.getBoundingClientRect();
+        pts[drag.i] = [Math.min(W, Math.max(0, (e.clientX - rc.left) / rc.width * W + drag.dx)), Math.min(H, Math.max(0, (e.clientY - rc.top) / rc.height * H + drag.dy))];
+        draw(); showLoupe(pts[drag.i]);
+      });
+      const end = (e) => { if (drag && e.pointerId === drag.id) { drag = null; loupe.hidden = true; } };
+      fit.addEventListener("pointerup", end); fit.addEventListener("pointercancel", end);
+      const done = (v) => { removeEventListener("resize", layout); el.hidden = true; el.innerHTML = ""; resolve(v); };
+      el.onclick = (e) => {
+        const c = e.target.closest("[data-c]")?.dataset.c;
+        if (c === "cancel") done(undefined);
+        else if (c === "orig") done(null);
+        else if (c === "ok") done(orderCorners(pts));
+      };
+      addEventListener("resize", layout);
+      layout(); draw();
+    });
+  }
+  async function recrop(s) {
+    let src = s.src, quad = s.quad;
+    if (!src) { // 저장된 명함: 보관된 사진에서 다시 자름
+      const img = new Image(); img.src = s.card.thumb;
+      try { await img.decode(); } catch { showToast("사진을 열 수 없습니다."); return; }
+      src = drawScaled(img, 2000); quad = findCardQuad(src);
+    }
+    const q = await cropDialog(src, quad);
+    if (q === undefined || sheet !== s) return;
+    s.src = src; s.quad = q;
+    setPhoto(s, q ? warpQuad(src, q, 1600) : src);
   }
 
   function fillFields(parsed, overwriteAll) {
@@ -601,11 +884,15 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const s = sheet;
     let loaded;
     try { loaded = await loadImage(file); } catch (err) { showToast(err.message); return; }
-    const thumb = drawScaled(loaded.img, 720).toDataURL("image/jpeg", 0.7);
-    const big = drawScaled(loaded.img, 1600);
+    const src = drawScaled(loaded.img, 2000);
     URL.revokeObjectURL(loaded.url);
-    s.card.thumb = thumb;
-    $("photoBox").innerHTML = `<div class="photo"><img src="${esc(thumb)}" alt="명함 사진"></div>`;
+    let found = null;
+    try { found = findCardQuad(src); } catch {}
+    const quad = await cropDialog(src, found);
+    if (quad === undefined || sheet !== s) return;
+    s.src = src; s.quad = quad;
+    const big = quad ? warpQuad(src, quad, 1600) : drawScaled(src, 1600);
+    setPhoto(s, big);
     if (!gemini.key) { setStatus("사진을 첨부했습니다. 글자는 위 칸에서 텍스트 스캔으로 넣어 주세요."); return; }
     setStatus("제미나이가 명함을 읽고 있습니다…", "busy");
     try {
@@ -754,6 +1041,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     else if (act === "save") saveEdit();
     else if (act === "edit" && s) openEdit({ ...s.card });
     else if (act === "contact" && s) addToContacts(s.card);
+    else if (act === "recrop" && s) recrop(s);
     else if (act === "paste") {
       try {
         const t = await navigator.clipboard.readText();
@@ -798,6 +1086,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   // 테스트용 (브라우저 콘솔에서 확인 가능)
   window.__parseCardText = parseCardText;
+  window.__card = { findCardQuad, warpQuad, cardAspect };
   renderList();
   // 키가 있으면 주소에 담아 둠 (홈 화면 아이콘·북마크로 복구 가능)
   if (gemini.key && !geminiFromHash()) { try { history.replaceState(null, "", keyHashUrl(gemini)); } catch {} }
