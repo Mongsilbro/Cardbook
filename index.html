@@ -174,10 +174,65 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   // ================= storage =================
   function load(key, fallback) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } }
   function store(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } }
+  // 브라우저가 localStorage를 지워도 복구할 수 있게 IndexedDB와 쿠키에 한 벌 더 저장
+  const idb = (() => {
+    let dbp = null;
+    const open = () => dbp || (dbp = new Promise((res, rej) => {
+      const r = indexedDB.open("cardbook", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    }));
+    const tx = (mode, fn) => open().then(db => new Promise((res, rej) => {
+      const t = db.transaction("kv", mode); const req = fn(t.objectStore("kv"));
+      t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error);
+    }));
+    return {
+      get: (k) => tx("readonly", s => s.get(k)).catch(() => undefined),
+      set: (k, v) => tx("readwrite", s => s.put(v, k)).catch(() => undefined)
+    };
+  })();
+  function setCookie(name, value) {
+    try { document.cookie = `${name}=${encodeURIComponent(value)}; max-age=34560000; path=/; SameSite=Lax; Secure`; } catch {}
+  }
+  function getCookie(name) {
+    try { const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)")); return m ? decodeURIComponent(m[1]) : ""; } catch { return ""; }
+  }
+  // 주소 끝(#k=...)에 키를 담아 두면, 저장소가 지워져도 홈 화면 아이콘으로 열 때 다시 채워짐
+  const b64e = (str) => btoa(unescape(encodeURIComponent(str))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const b64d = (str) => decodeURIComponent(escape(atob(str.replace(/-/g, "+").replace(/_/g, "/"))));
+  function geminiFromHash() {
+    const m = location.hash.match(/[#&]k=([A-Za-z0-9_\-]+)/);
+    if (!m) return null;
+    try { const g = JSON.parse(b64d(m[1])); return g && typeof g.key === "string" && g.key ? { key: g.key, model: g.model || DEFAULT_MODEL } : null; } catch { return null; }
+  }
+  function keyHashUrl(g) {
+    return location.origin + location.pathname + "#k=" + b64e(JSON.stringify({ key: g.key, model: g.model }));
+  }
+  function saveGemini(g) {
+    gemini = g;
+    store(KEY_GEMINI, g);
+    idb.set(KEY_GEMINI, g);
+    setCookie("cbk", g.key ? JSON.stringify(g) : "");
+    try {
+      if (g.key) history.replaceState(null, "", keyHashUrl(g));
+      else history.replaceState(null, "", location.pathname);
+    } catch {}
+  }
+
   let cards = load(KEY_CARDS, []);
   let gemini = load(KEY_GEMINI, { key: "", model: DEFAULT_MODEL });
+  (function restoreGeminiSync() {
+    const fromHash = geminiFromHash();
+    if (fromHash) { gemini = fromHash; store(KEY_GEMINI, gemini); idb.set(KEY_GEMINI, gemini); setCookie("cbk", JSON.stringify(gemini)); return; }
+    if (!gemini.key) {
+      try { const c = getCookie("cbk"); if (c) { const g = JSON.parse(c); if (g?.key) { gemini = g; store(KEY_GEMINI, g); } } } catch {}
+    }
+  })();
+  try { navigator.storage?.persist?.(); } catch {}
   const sortCards = () => cards.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   function saveCards() {
+    idb.set(KEY_CARDS, cards);
     if (store(KEY_CARDS, cards)) return true;
     // 저장 공간이 부족하면 사진을 빼고 다시 시도
     showToast("저장 공간이 부족해 명함 사진 없이 저장합니다.");
@@ -632,8 +687,16 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="color:var(--accent)">Google AI Studio</a>에 구글 계정으로 로그인</li>
           <li><b>Create API key</b>로 키를 만들어 복사한 뒤 위 칸에 붙여넣기</li>
           <li>무료 요금제는 보낸 내용이 구글 제품 개선에 쓰일 수 있습니다.</li>
-          <li>키는 이 아이폰의 Safari에만 저장되고 다른 곳으로 보내지 않습니다.</li>
+          <li>키는 이 아이폰에만 저장되고 구글 외 다른 곳으로 보내지 않습니다.</li>
         </ol>
+        ${gemini.key ? `<div class="status">키가 저장되어 있습니다. 키를 다시 넣지 않으려면 <b>&nbsp;아래 순서로 홈 화면 아이콘을 한 번 다시 만들어 주세요.</b></div>
+        <ol class="steps">
+          <li>지금 주소창 주소 끝에 <b>#k=…</b>가 붙어 있습니다. 이 주소에 키가 담겨 있습니다.</li>
+          <li>기존 홈 화면 아이콘을 지우고, 지금 화면에서 공유(□↑) → <b>홈 화면에 추가</b>를 누릅니다.</li>
+          <li>이제 그 아이콘으로 열면 브라우저가 저장소를 지워도 키가 자동으로 다시 들어갑니다.</li>
+          <li>이 주소는 다른 사람에게 보내지 마세요. 키가 함께 전달됩니다.</li>
+        </ol>
+        <button class="btn small" type="button" data-act="copyKeyUrl">키가 담긴 주소 복사 (북마크용)</button>` : ""}
         ${gemini.key ? `<button class="btn danger" type="button" data-act="clearKey">키 지우기</button>` : ""}
       </div>`);
   }
@@ -706,11 +769,16 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       cards = cards.filter(x => x.id !== s.card.id); saveCards(); renderList(); closeSheet(); showToast("삭제했습니다");
     }
     else if (act === "saveSettings") {
-      gemini = { key: $("gKey").value.trim(), model: $("gModel").value.trim() || DEFAULT_MODEL };
-      store(KEY_GEMINI, gemini); closeSheet(); showToast(gemini.key ? "제미나이 키를 저장했습니다" : "설정을 저장했습니다");
+      saveGemini({ key: $("gKey").value.trim(), model: $("gModel").value.trim() || DEFAULT_MODEL });
+      if (gemini.key) { openSettings(); showToast("저장했습니다. 아래 안내대로 홈 화면에 추가해 주세요"); }
+      else { closeSheet(); showToast("설정을 저장했습니다"); }
     }
     else if (act === "clearKey") {
-      gemini = { key: "", model: gemini.model || DEFAULT_MODEL }; store(KEY_GEMINI, gemini); closeSheet(); showToast("키를 지웠습니다");
+      saveGemini({ key: "", model: gemini.model || DEFAULT_MODEL }); closeSheet(); showToast("키를 지웠습니다");
+    }
+    else if (act === "copyKeyUrl") {
+      try { await navigator.clipboard.writeText(keyHashUrl(gemini)); showToast("주소를 복사했습니다"); }
+      catch { showToast("복사하지 못했습니다. 주소창의 주소를 길게 눌러 복사해 주세요."); }
     }
     else if (act === "exportJson") {
       const d = new Date(); const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
@@ -730,6 +798,23 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   // 테스트용 (브라우저 콘솔에서 확인 가능)
   window.__parseCardText = parseCardText;
   renderList();
+  // 키가 있으면 주소에 담아 둠 (홈 화면 아이콘·북마크로 복구 가능)
+  if (gemini.key && !geminiFromHash()) { try { history.replaceState(null, "", keyHashUrl(gemini)); } catch {} }
+
+  // localStorage가 비었으면 IndexedDB에서 복구
+  (async () => {
+    const [idbCards, idbGem] = await Promise.all([idb.get(KEY_CARDS), idb.get(KEY_GEMINI)]);
+    if (!cards.length && Array.isArray(idbCards) && idbCards.length) {
+      cards = idbCards; sortCards(); store(KEY_CARDS, cards); renderList();
+    } else if (cards.length && !idbCards) {
+      idb.set(KEY_CARDS, cards);
+    }
+    if (!gemini.key && idbGem && idbGem.key) {
+      saveGemini(idbGem);
+    } else if (gemini.key && !(idbGem && idbGem.key)) {
+      idb.set(KEY_GEMINI, gemini);
+    }
+  })();
 })();
 </script>
 </body>
