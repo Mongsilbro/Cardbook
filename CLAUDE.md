@@ -45,6 +45,7 @@
 - 외부 라이브러리·빌드 도구 없이 `index.html` 한 파일 유지 (사용자가 GitHub 웹에서 파일 올려 배포).
 - 개인정보(명함)는 기기에만 저장. 서버로 보내는 건 사용자가 키를 넣은 AI(제미나이·Groq) 호출뿐.
 - 입력칸 글자 크기 16px 이상 (iOS 자동 확대 방지), safe-area inset 유지.
+- 글꼴은 아이폰 시스템 글꼴(SF + Apple SD Gothic Neo, `--font-body`). 웹 글꼴 쓰지 않음(가독성·로딩). 숫자는 `tabular-nums`, 본문 16px·보조 글자 14px 이상, 한글 줄바꿈 `keep-all`.
 - 라이트/다크 모드 모두 `:root` 토큰으로 처리.
 - 분류 규칙을 바꾸면 `tests/parser.test.mjs`에 사례를 추가하고 통과 확인.
 
