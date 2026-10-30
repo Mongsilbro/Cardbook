@@ -11,6 +11,7 @@
 | `index.html` | 앱 전체 (HTML·CSS·JS 한 파일, 빌드 단계 없음) |
 | `manifest.webmanifest`, `apple-touch-icon.png`, `icon-512.png` | 홈 화면 아이콘·이름 |
 | `tests/phone.test.mjs` | 전화번호 형식 정리 회귀 테스트 (`node tests/phone.test.mjs`) |
+| `tests/vcard.test.mjs` | 연락처 파일(vCard) 회귀 테스트 — 이름 나누기(두 글자 성 `COMPOUND`)·이스케이프 (`node tests/vcard.test.mjs`) |
 | `ios/` | 초기에 만든 SwiftUI 네이티브 앱 (Vision OCR, Contacts). Mac이 없어 **현재 사용하지 않음**. 참고용 |
 
 `index.html` 스크립트 구획 (주석 `// ===== ... =====`로 구분):
@@ -55,7 +56,8 @@
 
 ## 테스트
 
-- 전화번호: `node tests/phone.test.mjs`
+- 전화번호·연락처 파일: `node tests/phone.test.mjs && node tests/vcard.test.mjs`
+- 코드를 지울 때는 지운 이름이 다른 곳에서 쓰이지 않는지 `grep`으로 확인 (2026-10 분류기 삭제 때 `COMPOUND`를 같이 지워 연락처 저장이 멈췄음).
 - 화면·저장: `python3 -m http.server` 후 Playwright로 열어 확인 (설정 저장 → 저장소 삭제 → 복구 등).
 - iOS 전용 동작(카메라, .vcf → 연락처 화면, 홈 화면 앱)은 자동 테스트 불가 → 사용자에게 확인 요청.
 - AI 호출은 Playwright `page.route`로 가짜 응답을 만들어 확인(실제 키 없음).
@@ -87,6 +89,7 @@ push 권한이 있으면 커밋·푸시하면 1~2분 뒤 반영된다고 사용�
 - 2026-10-29 명함 배경 지우기(영역 찾기·펴기), 읽기 속도(미리 보내기·thinking 최소), 무료 AI 두 곳(제미나이·Groq)
 - 2026-10-30 시스템 글꼴·글자 키움 / 사진 영구 삭제 버그 수정·중복 합치기·CSV·주소 검색 / 텍스트 스캔 삭제(AI만)
 - 2026-10-30 상세 화면에 전화·문자·메일 빠른 버튼
+- 2026-10-30 [버그] 연락처 저장 멈춤 수정: 분류기 삭제 때 두 글자 성 목록(`COMPOUND`)을 같이 지워 한글 이름에서 오류 → vCard 구획으로 옮기고 `tests/vcard.test.mjs` 추가
 - 2026-10-30 백업 알림: 마지막 백업 뒤 바뀐 명함 3장↑(또는 1장↑·14일 경과, 백업 없으면 3장부터)이면 목록 위 배너, '나중에'는 3일 미룸 (`cardbook.backup.v1`)
 
 ## 추가 기능 후보 (사용자 요청 시)
