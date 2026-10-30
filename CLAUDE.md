@@ -14,7 +14,9 @@
 | `ios/` | 초기에 만든 SwiftUI 네이티브 앱 (Vision OCR, Contacts). Mac이 없어 **현재 사용하지 않음**. 참고용 |
 
 `index.html` 스크립트 구획 (주석 `// ===== ... =====`로 구분):
-- **storage**: 명함은 `localStorage("cardbook.cards.v1")` + IndexedDB(`cardbook`/`kv`) 이중 저장, 한쪽이 비면 복구.
+- **storage**: 명함은 `localStorage("cardbook.cards.v1")` + IndexedDB(`cardbook`/`kv`) 이중 저장. 저장 시각 `cardbook.savedAt.v1`을 양쪽에 남김.
+  localStorage(약 5MB, 사진 있는 명함 60~70장)가 차면 거기엔 사진 빼고 저장 — 사진은 IndexedDB에만. 앱을 열 때 IndexedDB가
+  같거나 최신이면 그것(사진 포함)을 쓰고, 아니면 빠진 사진만 IndexedDB에서 채움. (예전엔 이때 사진이 영구 삭제되던 버그가 있었음)
   AI 설정(`{key, model, groq, groqModel}`, 이름은 예전 그대로 gemini)은 `localStorage("cardbook.gemini.v1")` + IndexedDB + 쿠키 `cbk` + **URL 해시 `#k=<base64url JSON>`**.
   해시는 홈 화면 아이콘 URL에 키를 담아 저장소가 지워져도 복구하려는 목적. `navigator.storage.persist()` 요청.
 - **parser** (`parseCardText`): 줄 단위 규칙 기반 분류. 정규식(이메일·전화·웹·주소), 직함 사전 `TITLES`,
@@ -37,7 +39,10 @@
   사진 아래 '명함 영역 다시 맞추기'로 다시 자를 수 있음(저장된 명함은 보관된 720px 사진에서 자르므로 화질이 낮음).
   검증은 Playwright로 CSS 3D 변형한 명함 장면(나뭇결·밝은 책상·어두운 명함·잡동사니·신문)을 스크린샷해 넣어 봄.
 - **vCard**: `toVCard()`로 3.0 vCard 생성 → `<a download>`로 `.vcf` 내려받기 → iOS Safari가 연락처 추가 화면을 띄움.
-- **UI**: 목록(검색) → 시트(새 명함/편집/상세/설정/백업). 새 명함 화면의 텍스트 칸은 iOS **텍스트 스캔(Live Text)**으로
+- **중복 감지** (`findDuplicate`, `mergeCards`): 새 명함 저장 때 휴대폰·이메일이 같거나 이름+사무실 전화가 같으면
+  '기존 명함에 합치기 / 따로 저장'을 물음. 합치면 새 내용 우선, 빈 칸은 기존 유지, 메모는 이어 붙임. 저장 때 전화번호는 `normalizePhone`으로 형식 통일.
+- **내보내기**: 백업(JSON), 전체 vCard, 엑셀용 CSV(UTF-8 BOM, 등록일 포함).
+- **UI**: 목록(검색: 이름·회사·부서·직함·이메일·웹·주소·메모·전화 숫자) → 시트(새 명함/편집/상세/설정/백업). 새 명함 화면의 텍스트 칸은 iOS **텍스트 스캔(Live Text)**으로
   입력받아 350ms 디바운스 후 자동 분류. 사용자가 직접 고친 칸(`sheet.dirty`)은 자동 채우기가 덮어쓰지 않음.
 
 ## 지켜야 할 것
@@ -73,6 +78,4 @@ push 권한이 있으면 커밋·푸시하면 1~2분 뒤 반영된다고 사용�
 ## 추가 기능 후보 (사용자 요청 시)
 
 - 명함 앞/뒷면 2장 보관, 태그·만난 날짜
-- CSV(엑셀) 내보내기
-- 중복 명함 감지(전화·이메일 기준)
 - 분류 정확도 개선: 실제 명함에서 틀린 사례를 받아 테스트에 추가하며 규칙 보강

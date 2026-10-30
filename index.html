@@ -104,7 +104,9 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
 .scanbox { display: grid; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; }
 .scanbox textarea { width: 100%; min-height: 120px; font: inherit; font-size: 16px; border: 1px dashed var(--accent); border-radius: 8px; padding: 10px; background: var(--surface-2); color: var(--fg); resize: vertical; }
-.scanbox .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dup { display: grid; gap: 10px; padding: 14px; border-radius: var(--r); border: 1.5px solid var(--accent); background: var(--accent-soft); }
+.dup p { margin: 0; }
+.dup .row2, .scanbox .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .steps { margin: 0; padding-left: 20px; font-size: 14px; color: var(--muted); display: grid; gap: 2px; }
 .steps b { color: var(--fg); font-weight: 500; }
 
@@ -176,6 +178,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   "use strict";
   const FIELDS = [["name","이름"],["company","회사"],["department","부서"],["jobTitle","직함"],["mobile","휴대폰"],["phone","전화"],["fax","팩스"],["email","이메일"],["website","웹사이트"],["address","주소"],["memo","메모"]];
   const KEY_CARDS = "cardbook.cards.v1";
+  const KEY_SAVED = "cardbook.savedAt.v1"; // 마지막 저장 시각. localStorage·IndexedDB 중 어느 쪽이 최신인지 가림
   const KEY_GEMINI = "cardbook.gemini.v1";
   const DEFAULT_MODEL = "gemini-3.5-flash-lite"; // 제미나이 중 가장 빠름, 무료
   const OLD_MODELS = ["gemini-3.6-flash"];        // 예전 기본값으로 저장된 설정은 새 기본값으로
@@ -249,11 +252,12 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   try { navigator.storage?.persist?.(); } catch {}
   const sortCards = () => cards.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   function saveCards() {
-    idb.set(KEY_CARDS, cards);
-    if (store(KEY_CARDS, cards)) return true;
-    // 저장 공간이 부족하면 사진을 빼고 다시 시도
-    showToast("저장 공간이 부족해 명함 사진 없이 저장합니다.");
-    return store(KEY_CARDS, cards.map(c => ({ ...c, thumb: "" })));
+    const at = Date.now();
+    idb.set(KEY_CARDS, cards); idb.set(KEY_SAVED, at);
+    // localStorage(약 5MB)가 차면 사진을 빼고 글자만 저장. 사진은 IndexedDB(용량 넉넉)에 그대로 있고 앱을 열 때 다시 채움
+    const ok = store(KEY_CARDS, cards) || store(KEY_CARDS, cards.map(c => ({ ...c, thumb: "" })));
+    if (ok) store(KEY_SAVED, at);
+    return ok;
   }
   sortCards();
 
@@ -761,7 +765,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   function matches(c, q) {
     if (!q) return true;
     const t = q.toLowerCase();
-    if (["name","company","department","jobTitle","email","memo"].some(k => String(c[k] || "").toLowerCase().includes(t))) return true;
+    if (["name","company","department","jobTitle","email","website","address","memo"].some(k => String(c[k] || "").toLowerCase().includes(t))) return true;
     const dq = digits(q);
     return dq.length >= 3 && ["mobile","phone","fax"].some(k => digits(c[k]).includes(dq));
   }
@@ -817,6 +821,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     openSheet(`
       ${bar(`<button class="linkbtn" type="button" data-act="close">취소</button>`, isNew ? "새 명함" : "명함 편집", `<button class="linkbtn strong" type="button" data-act="save">저장</button>`)}
       <div class="sheet-body">
+        <div id="dupBox"></div>
         ${isNew ? `
         <div class="scanbox">
           <textarea id="scanText" placeholder="여기를 길게 누른 뒤 '텍스트 스캔'을 눌러 명함을 비추세요." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
@@ -825,7 +830,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
             <li>명함을 비추고 <b>입력</b>을 누르면 아래 칸이 자동으로 채워집니다.</li>
           </ol>
           <div class="row2">
-            <button class="btn small" type="button" data-act="paste">복사한 글자 붙여넣기</button>
+            <button class="btn small" type="button" data-act="paste">글자 붙여넣기</button>
             <label class="btn small filebtn">${geminiOn ? "사진 찍고 AI로 읽기" : "명함 사진 첨부"}<input id="photoIn" type="file" accept="image/*"></label>
           </div>
           <div id="readStatus"></div>
@@ -1014,11 +1019,40 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     }
   }
 
-  function saveEdit() {
+  // 같은 사람: 휴대폰이나 이메일이 같거나, 이름과 사무실 전화가 같음 (대표번호는 동료끼리 같을 수 있어 이름도 봄)
+  function findDuplicate(c) {
+    const mob = digits(c.mobile), em = (c.email || "").toLowerCase(), ph = digits(c.phone), nm = (c.name || "").replace(/\s/g, "");
+    return cards.find(x => x.id !== c.id && (
+      (mob.length >= 10 && digits(x.mobile) === mob) ||
+      (em && (x.email || "").toLowerCase() === em) ||
+      (nm && ph.length >= 8 && (x.name || "").replace(/\s/g, "") === nm && digits(x.phone) === ph)));
+  }
+  // 새 명함 내용이 우선(이직·승진 반영), 빈 칸은 기존 내용 유지, 메모는 이어 붙임
+  function mergeCards(old, c) {
+    const m = { ...old };
+    for (const [k] of FIELDS) if (k !== "memo" && c[k]) m[k] = c[k];
+    m.memo = [...new Set([old.memo, c.memo].filter(Boolean))].join("\n");
+    if (c.thumb) m.thumb = c.thumb;
+    return m;
+  }
+  function saveEdit(mode) {
     if (!sheet || sheet.kind !== "edit") return;
-    const c = { ...sheet.card };
+    let c = { ...sheet.card };
     for (const [k] of FIELDS) { const el = $("f-" + k); if (el) c[k] = el.value.trim(); }
     if (FIELDS.every(([k]) => !c[k])) { showToast("이름이나 연락처를 한 가지 이상 입력해 주세요."); return; }
+    // 손으로 넣은 번호도 010-1234-5678 꼴로 (알아볼 수 없는 형식이면 그대로 둠)
+    for (const k of ["mobile", "phone", "fax"]) { const n = c[k] && normalizePhone(c[k]); if (n) c[k] = n; }
+    if (!c.id && mode !== "new") {
+      const d = findDuplicate(c);
+      if (d && mode === "merge") c = mergeCards(d, c);
+      else if (d) {
+        $("dupBox").innerHTML = `<div class="dup"><p><b>이미 저장된 명함과 같은 사람 같습니다.</b><br>${esc(d.name || "이름 없음")} · ${esc([d.company, d.jobTitle].filter(Boolean).join(" ") || d.mobile || d.email)}</p>
+          <p class="note">합치면 새 명함 내용으로 바꾸고, 비어 있는 칸은 기존 내용을 그대로 둡니다.</p>
+          <div class="row2"><button class="btn small primary" type="button" data-act="saveMerge">기존 명함에 합치기</button><button class="btn small" type="button" data-act="saveNew">따로 저장</button></div></div>`;
+        $("sheet").scrollTop = 0;
+        return;
+      }
+    }
     if (!c.id) { c.id = newId(); c.createdAt = Date.now(); }
     c.updatedAt = Date.now();
     const i = cards.findIndex(x => x.id === c.id);
@@ -1111,6 +1145,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           <button class="btn primary" type="button" data-act="exportJson" ${cards.length ? "" : "disabled"}>백업 파일 저장 (${cards.length}장)</button>
           <label class="btn filebtn">백업 파일에서 복원<input id="importIn" type="file" accept=".json,application/json"></label>
           <button class="btn" type="button" data-act="exportAllVcf" ${cards.length ? "" : "disabled"}>전체를 연락처 파일로 저장</button>
+          <button class="btn" type="button" data-act="exportCsv" ${cards.length ? "" : "disabled"}>엑셀 파일(CSV)로 저장</button>
         </div>
       </div>`);
     $("importIn").addEventListener("change", async (e) => {
@@ -1151,6 +1186,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const s = sheet;
     if (act === "close") closeSheet();
     else if (act === "save") saveEdit();
+    else if (act === "saveMerge") saveEdit("merge");
+    else if (act === "saveNew") saveEdit("new");
     else if (act === "edit" && s) openEdit({ ...s.card });
     else if (act === "contact" && s) addToContacts(s.card);
     else if (act === "recrop" && s) recrop(s);
@@ -1185,6 +1222,13 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       const d = new Date(); const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
       downloadFile(`명함첩-백업-${stamp}.json`, JSON.stringify(cards), "application/json");
     }
+    else if (act === "exportCsv") {
+      // 엑셀이 한글을 깨뜨리지 않게 UTF-8 BOM. 줄바꿈·쉼표·따옴표가 든 칸은 따옴표로 감쌈 (하이픈 있는 전화번호는 엑셀이 문자로 둠)
+      const cell = (v) => { const t = String(v ?? ""); return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+      const day = (t) => t ? new Date(t).toLocaleDateString("sv-SE") : "";
+      const rows = [[...FIELDS.map(([, l]) => l), "등록일"], ...cards.map(c => [...FIELDS.map(([k]) => c[k]), day(c.createdAt)])];
+      downloadFile(`명함첩-${day(Date.now())}.csv`, "\ufeff" + rows.map(r => r.map(cell).join(",")).join("\r\n"), "text/csv");
+    }
     else if (act === "exportAllVcf") {
       downloadFile("명함첩-전체.vcf", cards.map(toVCard).join(""), "text/vcard");
     }
@@ -1203,11 +1247,19 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   // 키가 있으면 주소에 담아 둠 (홈 화면 아이콘·북마크로 복구 가능)
   if (hasKey(gemini) && !geminiFromHash()) { try { history.replaceState(null, "", keyHashUrl(gemini)); } catch {} }
 
-  // localStorage가 비었으면 IndexedDB에서 복구
+  // 두 저장소 맞추기: IndexedDB가 같거나 더 최신이면 그쪽(사진 포함)을 쓰고, 아니면 빠진 사진만 IndexedDB에서 채움
   (async () => {
-    const [idbCards, idbGem] = await Promise.all([idb.get(KEY_CARDS), idb.get(KEY_GEMINI)]);
-    if (!cards.length && Array.isArray(idbCards) && idbCards.length) {
-      cards = idbCards; sortCards(); store(KEY_CARDS, cards); renderList();
+    const [idbCards, idbGem, idbAt] = await Promise.all([idb.get(KEY_CARDS), idb.get(KEY_GEMINI), idb.get(KEY_SAVED)]);
+    const lsAt = load(KEY_SAVED, 0);
+    if (Array.isArray(idbCards) && idbCards.length) {
+      if (!cards.length || (idbAt && idbAt >= lsAt)) {
+        cards = idbCards;
+        if (!load(KEY_CARDS, []).length) store(KEY_CARDS, cards) || store(KEY_CARDS, cards.map(c => ({ ...c, thumb: "" })));
+      } else {
+        const th = new Map(idbCards.filter(c => c.thumb).map(c => [c.id, c.thumb]));
+        cards.forEach(c => { if (!c.thumb && th.has(c.id)) c.thumb = th.get(c.id); });
+      }
+      sortCards(); renderList();
     } else if (cards.length && !idbCards) {
       idb.set(KEY_CARDS, cards);
     }
