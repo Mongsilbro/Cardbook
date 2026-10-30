@@ -104,7 +104,10 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
 .aibox { display: grid; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; }
 .dup { display: grid; gap: 10px; padding: 14px; border-radius: var(--r); border: 1.5px solid var(--accent); background: var(--accent-soft); }
-.dup p { margin: 0; }
+.dup p, .nag p { margin: 0; }
+.nag { display: grid; gap: 10px; padding: 14px; border-radius: var(--r); border: 1.5px solid var(--accent); background: var(--accent-soft); font-size: 15px; }
+.nag .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+#backupNag:empty { display: none; }
 #dupBox:empty { display: none; }
 .dup .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .steps { margin: 0; padding-left: 20px; font-size: 14px; color: var(--muted); display: grid; gap: 2px; }
@@ -163,6 +166,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     명함 추가
   </button>
 
+  <div id="backupNag"></div>
   <input class="search" id="search" type="search" placeholder="이름, 회사, 전화번호 검색" autocomplete="off">
   <div id="list" class="list"></div>
 
@@ -183,6 +187,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   const FIELDS = [["name","이름"],["company","회사"],["department","부서"],["jobTitle","직함"],["mobile","휴대폰"],["phone","전화"],["fax","팩스"],["email","이메일"],["website","웹사이트"],["address","주소"],["memo","메모"]];
   const KEY_CARDS = "cardbook.cards.v1";
   const KEY_SAVED = "cardbook.savedAt.v1"; // 마지막 저장 시각. localStorage·IndexedDB 중 어느 쪽이 최신인지 가림
+  const KEY_BACKUP = "cardbook.backup.v1"; // { at: 마지막 백업 파일 저장 시각, snooze: '나중에'를 누른 뒤 다시 알릴 시각 }
   const KEY_GEMINI = "cardbook.gemini.v1";
   const DEFAULT_MODEL = "gemini-3.5-flash-lite"; // 제미나이 중 가장 빠름, 무료
   const OLD_MODELS = ["gemini-3.6-flash"];        // 예전 기본값으로 저장된 설정은 새 기본값으로
@@ -644,7 +649,31 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const dq = digits(q);
     return dq.length >= 3 && ["mobile","phone","fax"].some(k => digits(c[k]).includes(dq));
   }
+  // 백업 알림: 마지막 백업 뒤 새로 넣거나 고친 명함이 3장 이상, 또는 1장 이상이고 14일이 지났으면 목록 위에 띄움 (백업한 적 없으면 3장부터)
+  const DAY = 86400000;
+  function renderBackupNag() {
+    const b = load(KEY_BACKUP, {}), now = Date.now();
+    const changed = cards.filter(c => (c.updatedAt || c.createdAt || 0) > (b.at || 0)).length;
+    const due = b.at ? changed >= 3 || (changed >= 1 && now - b.at >= 14 * DAY) : cards.length >= 3;
+    const el = $("backupNag");
+    if (!due || (b.snooze || 0) > now) { el.innerHTML = ""; return; }
+    const msg = b.at ? `마지막 백업(${Math.max(1, Math.floor((now - b.at) / DAY))}일 전) 뒤로 바뀐 명함이 ${changed}장 있습니다.` : `아직 백업한 적이 없습니다. 명함 ${cards.length}장이 이 아이폰에만 있습니다.`;
+    el.innerHTML = `<div class="nag"><p>${msg}<br><span class="note">Safari 기록을 지우면 함께 사라지니 '파일' 앱에 백업해 두세요.</span></p>
+      <div class="row2"><button class="btn small primary" type="button" data-nag="backup">지금 백업</button><button class="btn small" type="button" data-nag="later">나중에</button></div></div>`;
+  }
+  function exportBackup() {
+    const d = new Date(); const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+    downloadFile(`명함첩-백업-${stamp}.json`, JSON.stringify(cards), "application/json");
+    store(KEY_BACKUP, { at: Date.now() });
+    renderBackupNag();
+  }
+  $("backupNag").addEventListener("click", (e) => {
+    const a = e.target.closest("[data-nag]")?.dataset.nag;
+    if (a === "backup") exportBackup();
+    else if (a === "later") { store(KEY_BACKUP, { ...load(KEY_BACKUP, {}), snooze: Date.now() + 3 * DAY }); renderBackupNag(); }
+  });
   function renderList() {
+    renderBackupNag();
     $("count").textContent = cards.length + "장";
     const list = $("list");
     if (!cards.length) {
@@ -1085,10 +1114,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       try { await navigator.clipboard.writeText(keyHashUrl(gemini)); showToast("주소를 복사했습니다"); }
       catch { showToast("복사하지 못했습니다. 주소창의 주소를 길게 눌러 복사해 주세요."); }
     }
-    else if (act === "exportJson") {
-      const d = new Date(); const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
-      downloadFile(`명함첩-백업-${stamp}.json`, JSON.stringify(cards), "application/json");
-    }
+    else if (act === "exportJson") exportBackup();
     else if (act === "exportCsv") {
       // 엑셀이 한글을 깨뜨리지 않게 UTF-8 BOM. 줄바꿈·쉼표·따옴표가 든 칸은 따옴표로 감쌈 (하이픈 있는 전화번호는 엑셀이 문자로 둠)
       const cell = (v) => { const t = String(v ?? ""); return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
