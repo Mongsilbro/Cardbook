@@ -102,11 +102,11 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 
-.scanbox { display: grid; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; }
-.scanbox textarea { width: 100%; min-height: 120px; font: inherit; font-size: 16px; border: 1px dashed var(--accent); border-radius: 8px; padding: 10px; background: var(--surface-2); color: var(--fg); resize: vertical; }
+.aibox { display: grid; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; }
 .dup { display: grid; gap: 10px; padding: 14px; border-radius: var(--r); border: 1.5px solid var(--accent); background: var(--accent-soft); }
 .dup p { margin: 0; }
-.dup .row2, .scanbox .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+#dupBox:empty { display: none; }
+.dup .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .steps { margin: 0; padding-left: 20px; font-size: 14px; color: var(--muted); display: grid; gap: 2px; }
 .steps b { color: var(--fg); font-weight: 500; }
 
@@ -261,56 +261,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   }
   sortCards();
 
-  // ================= parser (명함 글자 → 항목) =================
-  const P = {
-    email: /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/,
-    phone: /(?<!\d)(?:(?:\+\s?82|82)[\s.\-]*(?:\(0\))?[\s.\-]*\d{1,2}|0\d{1,2}|\(0\d{1,2}\))[\s.)\-]*\d{3,4}[\s.\-]*\d{4}(?!\d)|(?<!\d)1[5-9]\d{2}[\s.\-]\d{4}(?!\d)/g,
-    website: /\b(?:https?:\/\/)?(?:www\.)?[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.(?:co\.kr|go\.kr|or\.kr|ac\.kr|re\.kr|com|net|org|kr|io|biz|info|co)(?:\/\S*)?\b/i,
-    region: /^\(?\d{0,5}\)?\s*(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충청|충북|충남|전라|전북|전남|경상|경북|경남|제주)/,
-    addrLabel: /^(주소|본사|공장|사무소|address|addr)\s*[.:：]?\s*|^(a|add)\s*[.:：]\s*/i,
-    addrCont: /(\d+층|\d+호|빌딩|타워|센터|플라자|오피스|아파트|\(.*동\))/,
-    engTitle: /\b(ceo|cto|cfo|coo|president|vice president|director|manager|engineer|researcher|professor|team leader|head of|partner|consultant|designer|developer|specialist|officer|associate|assistant|senior|principal)\b/i
-  };
-  const TITLES = ["대표이사","대표","부회장","회장","부사장","사장","전무이사","전무","상무이사","상무","부이사관","이사관","이사","본부장","사업부장","실장","국장","부장","차장","과장","대리","주임","사원","팀장","파트장","그룹장","센터장","소장","원장","지점장","선임연구원","책임연구원","수석연구원","주임연구원","연구위원","연구원","선임","책임","수석","매니저","프로","주무관","사무관","서기관","기술서기관","교수","부교수","조교수","변호사","변리사","회계사","세무사","노무사","기술사","고문","위원","감사","공학박사","박사"].sort((a, b) => b.length - a.length);
-  const TITLE_SET = new Set(TITLES);
-  const SURNAMES = new Set("김이박최정강조윤장임한오서신권황안송류유전홍고문양손배백허남심노하곽성차주우구민진나지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모탁국어은편용예경봉사부라빈피");
-  const COMPOUND = ["남궁","황보","제갈","선우","독고","사공","서문","동방"];
-  const STOP = new Set(["대표","본사","공장","지사","지점","주소","전화","팩스","휴대폰","홈페이지","이메일","사무실","고객센터","대표번호","직통","내선","명함","본점","영업","기술","관리","기획"]);
-  const COMPANY_WORDS = ["주식회사","(주)","㈜","(유)","유한회사","재단법인","사단법인","협동조합","협회","공사","공단","그룹","은행","증권","보험","병원","의원","대학교","연구원","연구소","진흥원","평가원","co.,","co.","corp","inc","ltd","llc","gmbh","company","corporation"];
-  const SEP = /[\s\/|,·:：()\[\]]+/;
-
-  function koreanName(t) {
-    const c = String(t).replace(/[\s·.]/g, "");
-    if (!/^[가-힣]{2,4}$/.test(c) || STOP.has(c)) return null;
-    if (c.length === 4) return COMPOUND.some(s => c.startsWith(s)) ? c : null;
-    if (!SURNAMES.has(c[0])) return null;
-    if (c.length === 3 && /[시군]$/.test(c)) return null;
-    return c;
-  }
-  function englishName(t) {
-    if (/[가-힣]/.test(t) || t.length > 30) return null;
-    return /^[A-Z][A-Za-z'.\-]+([ \-]+[A-Z][A-Za-z'.\-]+){1,2}$/.test(t) ? t : null;
-  }
-  function isCompany(t) {
-    const low = t.toLowerCase();
-    if (COMPANY_WORDS.some(w => low.includes(w))) return true;
-    const c = t.replace(/\s/g, "");
-    if (/(시청|도청|구청|군청|교육청|특별시|광역시|특별자치도|특별자치시)$/.test(c)) return true;
-    return c.length >= 3 && /^[가-힣]{2,}(부|청|처|위원회)$/.test(c);
-  }
-  function isDepartment(t) {
-    const c = t.replace(/\s/g, "");
-    if (c.length > 25) return false;
-    if (c.length >= 3 && /(팀|과|본부|사업부|사업단|부문|센터|그룹|파트|담당관)$/.test(c)) return true;
-    if (c.length >= 4 && /(실|국|단)$/.test(c)) return true;
-    return /\b(team|dept\.?|department|division|office|lab)$/i.test(t);
-  }
-  function isAddress(t) {
-    if (t.length < 6) return false;
-    if (P.region.test(t)) return true;
-    if (/[가-힣0-9]+(로|길)\s?\d+/.test(t)) return true;
-    return /[가-힣]+(시|구|군)\s/.test(t) && /[가-힣]+(동|리|읍|면)\s?\d+/.test(t);
-  }
+  // ================= 전화번호 =================
+  // 010-1234-5678 · 02-123-4567 · 1588-1234 꼴로. +82는 0으로. 알아볼 수 없는 형식이면 null
   function normalizePhone(raw) {
     let d = digits(raw);
     if (d.startsWith("82") && d.length >= 10) { d = d.slice(2); if (!d.startsWith("0")) d = "0" + d; }
@@ -320,87 +272,6 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const mid = d.slice(a, -4);
     if (mid.length < 3 || mid.length > 4) return null;
     return d.slice(0, a) + "-" + mid + "-" + d.slice(-4);
-  }
-  function extractPhones(text) {
-    const out = []; let cursor = 0;
-    for (const m of text.matchAll(P.phone)) {
-      const label = text.slice(cursor, m.index).toLowerCase().replace(/[^a-z가-힣]/g, "");
-      cursor = m.index + m[0].length;
-      const num = normalizePhone(m[0]);
-      if (!num) continue;
-      const fax = (label.includes("fax") || label.includes("팩스") || label.endsWith("f")) && !(label.includes("tel") && label.includes("fax"));
-      out.push({ kind: num.startsWith("01") ? "mobile" : fax ? "fax" : "office", num });
-    }
-    return out;
-  }
-  function splitTitle(text) {
-    const tokens = text.split(SEP).filter(Boolean);
-    const found = tokens.filter(t => TITLE_SET.has(t));
-    if (found.length) return [found.join(" "), tokens.filter(t => !TITLE_SET.has(t)).join(" ")];
-    const c = text.replace(/\s/g, "");
-    for (const t of TITLES) {
-      if (c.endsWith(t) && c.length > t.length) {
-        const pre = c.slice(0, -t.length);
-        if (koreanName(pre)) return [t, pre];
-      }
-    }
-    return [null, text];
-  }
-
-  function parseCardText(text) {
-    const d = blankCard();
-    const left = [], names = [], engNames = [];
-    let lastAddr = false;
-    const lines = String(text).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    for (const raw of lines) {
-      let used = false;
-      if (lastAddr && P.addrCont.test(raw) && !extractPhones(raw).length) { d.address += " " + raw; continue; }
-      lastAddr = false;
-      if (/[@＠]/.test(raw)) {
-        const m = raw.replace(/＠/g, "@").replace(/\s*@\s*/g, "@").replace(/\s*\.\s*(?=[a-z]{2,}\b)/gi, ".").match(P.email);
-        if (m) { if (!d.email) d.email = m[0].toLowerCase(); used = true; }
-      }
-      for (const p of extractPhones(raw)) {
-        used = true;
-        if (p.kind === "mobile" && !d.mobile) d.mobile = p.num;
-        else if (p.kind === "fax" && !d.fax) d.fax = p.num;
-        else if (p.kind === "office" && !d.phone) d.phone = p.num;
-      }
-      const noMail = raw.split(" ").filter(w => !/[@＠]/.test(w)).join(" ");
-      const site = noMail.match(P.website);
-      if (site) { const s = site[0].toLowerCase(); if (!d.website && !d.email.endsWith(s)) d.website = s; used = true; }
-      if (!used) {
-        const st = raw.replace(P.addrLabel, "").trim();
-        if (isAddress(st)) { if (!d.address) { d.address = st; lastAddr = true; } else left.push(raw); used = true; }
-      }
-      if (used) continue;
-
-      const [title, rest] = splitTitle(raw);
-      if (title && !d.jobTitle) d.jobTitle = title;
-      const r = rest.trim();
-      if (!r) continue;
-      const bonus = title ? 2 : 1;
-      if (isCompany(r)) { if (!d.company) d.company = r; else if (!d.department) d.department = r; else left.push(raw); continue; }
-      if (isDepartment(r)) { if (!d.department) d.department = r; else left.push(raw); continue; }
-      const kn = koreanName(r);
-      if (kn) { names.push({ n: kn, s: bonus, i: names.length }); continue; }
-      if (!/[가-힣]/.test(r) && r.split(" ").length <= 6 && P.engTitle.test(r)) { if (!d.jobTitle) d.jobTitle = r; else left.push(raw); continue; }
-      const en = englishName(r);
-      if (en) { engNames.push(en); continue; }
-      if (/\s/.test(r) && /(다|요|니다)[.!~]?$/.test(r)) { left.push(raw); continue; } // 문장(슬로건 등)은 통째로 메모
-      const unknown = []; let any = false;
-      for (const tok of r.split(SEP).filter(Boolean)) {
-        if (isDepartment(tok) && !d.department) { d.department = tok; any = true; }
-        else if (koreanName(tok)) { names.push({ n: koreanName(tok), s: bonus, i: names.length }); any = true; }
-        else unknown.push(tok);
-      }
-      if (!any) left.push(raw); else if (unknown.length) left.push(unknown.join(" "));
-    }
-    names.sort((a, b) => b.s - a.s || a.i - b.i);
-    if (names.length) { d.name = names[0].n; left.push(...names.slice(1).map(x => x.n), ...engNames); }
-    else if (engNames.length) { d.name = engNames[0]; left.push(...engNames.slice(1)); }
-    d.memo = left.join("\n");
-    return d;
   }
 
   // ================= AI 읽기 (선택: 제미나이 + Groq) =================
@@ -776,7 +647,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       list.innerHTML = `<div class="empty">
         <div class="frame">90 × 50 mm</div>
         <h2>아직 저장된 명함이 없습니다</h2>
-        <p class="note"><b>명함 추가</b>를 누르고 글자 칸을 길게 눌러 <b>텍스트 스캔</b>으로 명함을 비추면<br>이름, 회사, 전화번호, 이메일, 주소가 자동으로 나뉩니다.</p>
+        <p class="note"><b>명함 추가</b>를 누르고 명함을 찍으면<br>AI가 이름, 회사, 전화번호, 이메일, 주소를 읽어 채워 줍니다.</p>
       </div>`;
       return;
     }
@@ -797,7 +668,10 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const c = cards.find(x => x.id === b.dataset.id); if (c) openDetail(c);
   });
   $("search").addEventListener("input", (e) => { query = e.target.value.trim(); renderList(); });
-  $("add").addEventListener("click", () => openEdit({ ...blankCard(), id: null, thumb: "" }));
+  $("add").addEventListener("click", () => {
+    openEdit({ ...blankCard(), id: null, thumb: "" });
+    if (hasKey(gemini)) $("photoIn")?.click(); // 키가 있으면 바로 카메라·사진 고르기 (같은 탭 안에서 불러야 iOS가 허용)
+  });
   $("openSettings").addEventListener("click", openSettings);
   $("openBackup").addEventListener("click", openBackup);
 
@@ -823,16 +697,11 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       <div class="sheet-body">
         <div id="dupBox"></div>
         ${isNew ? `
-        <div class="scanbox">
-          <textarea id="scanText" placeholder="여기를 길게 누른 뒤 '텍스트 스캔'을 눌러 명함을 비추세요." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
-          <ol class="steps">
-            <li>위 칸을 <b>길게 누르기</b> → <b>텍스트 스캔</b> (또는 키보드의 스캔 버튼)</li>
-            <li>명함을 비추고 <b>입력</b>을 누르면 아래 칸이 자동으로 채워집니다.</li>
-          </ol>
-          <div class="row2">
-            <button class="btn small" type="button" data-act="paste">글자 붙여넣기</button>
-            <label class="btn small filebtn">${geminiOn ? "사진 찍고 AI로 읽기" : "명함 사진 첨부"}<input id="photoIn" type="file" accept="image/*"></label>
-          </div>
+        <div class="aibox">
+          ${geminiOn ? `<p class="note">명함을 찍으면 AI가 이름·연락처를 읽어 아래 칸을 채웁니다.</p>`
+            : `<p class="note"><b>AI 키를 넣으면</b> 명함 사진만 찍어도 칸이 자동으로 채워집니다. 키가 없으면 사진만 붙이고 직접 입력합니다.</p>
+               <button class="btn small" type="button" data-act="openSettings">AI 설정 열기 (무료)</button>`}
+          <label class="btn primary filebtn">${geminiOn ? "명함 찍기" : "명함 사진 첨부"}<input id="photoIn" type="file" accept="image/*"></label>
           <div id="readStatus"></div>
         </div>` : ""}
         <div id="photoBox" class="photobox">${photoHtml(card.thumb)}</div>
@@ -851,11 +720,6 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
     // 사용자가 직접 고친 칸은 자동 채우기에서 덮어쓰지 않음
     for (const [k] of FIELDS) $("f-" + k)?.addEventListener("input", () => sheet?.dirty.add(k));
-    const scan = $("scanText");
-    if (scan) {
-      let t;
-      scan.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => fillFromText(scan.value), 350); });
-    }
     $("photoIn")?.addEventListener("change", onPhoto);
   }
 
@@ -953,16 +817,12 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     for (const [k] of FIELDS) {
       const el = $("f-" + k); if (!el) continue;
       if (sheet.dirty.has(k) && !overwriteAll) continue;
-      const v = String(parsed[k] || "").trim();
+      let v = String(parsed[k] || "").trim();
+      if (["mobile", "phone", "fax"].includes(k)) v = normalizePhone(v) || v;
       if (el.value !== v) { el.value = v; }
       if (v) n++;
     }
     return n;
-  }
-  function fillFromText(text) {
-    if (!text.trim()) return;
-    const n = fillFields(parseCardText(text), false);
-    setStatus(n ? `${n}개 항목을 채웠습니다. 틀린 곳을 고친 뒤 저장하세요.` : "글자에서 항목을 찾지 못했습니다. 직접 입력해 주세요.");
   }
   function setStatus(msg, kind) {
     const el = $("readStatus"); if (!el) return;
@@ -998,7 +858,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     s.src = src; s.quad = quad;
     const big = quad ? warpQuad(src, quad, 1200) : drawScaled(src, 1200);
     setPhoto(s, big);
-    if (!hasKey(gemini)) { setStatus("사진을 첨부했습니다. 글자는 위 칸에서 텍스트 스캔으로 넣어 주세요."); return; }
+    if (!hasKey(gemini)) { setStatus("사진을 붙였습니다. 아래 칸은 직접 입력해 주세요."); return; }
     // 자동 영역이 틀려 모서리를 크게 옮겼으면 새로 자른 사진으로 다시 읽음
     const far = found && quad && quad.some((p, i) => Math.hypot(p[0] - found[i][0], p[1] - found[i][1]) > 0.04 * Math.hypot(src.width, src.height));
     if (far) { pre.ac.abort(); pre = read(big); }
@@ -1007,14 +867,14 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       const result = await pre.p;
       if (sheet !== s) return;
       const n = fillFields(result.data || {}, false);
-      setStatus(n ? `칸을 채웠습니다(${result.by}). 틀린 곳을 고친 뒤 저장하세요.` : "글자를 찾지 못했습니다. 텍스트 스캔을 이용해 주세요.");
+      setStatus(n ? `칸을 채웠습니다(${result.by}). 틀린 곳을 고친 뒤 저장하세요.` : "글자를 찾지 못했습니다. 명함이 잘 보이게 다시 찍거나 직접 입력해 주세요.");
     } catch (err) {
       if (sheet !== s) return;
       const st = err?.status, who = err?.provider || "AI";
       const msg = st === 400 || st === 401 || st === 403 ? `${who} API 키가 맞지 않거나 모델 이름이 틀렸습니다. AI 설정을 확인해 주세요.`
         : st === 404 ? `${who} 모델을 찾을 수 없습니다. AI 설정에서 모델 이름을 확인해 주세요.`
-        : st === 429 ? `${who} 무료 한도에 걸렸습니다. 잠시 후 다시 하거나 텍스트 스캔을 이용해 주세요.`
-        : `${who}에서 읽지 못했습니다. 인터넷 연결을 확인하거나 텍스트 스캔을 이용해 주세요.`;
+        : st === 429 ? `${who} 무료 한도에 걸렸습니다. 잠시 후 다시 찍거나 직접 입력해 주세요.`
+        : `${who}에서 읽지 못했습니다. 인터넷 연결을 확인하고 다시 찍거나 직접 입력해 주세요.`;
       setStatus(msg, "err");
     }
   }
@@ -1103,7 +963,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     openSheet(`
       ${bar(`<button class="linkbtn" type="button" data-act="close">닫기</button>`, "AI 설정", `<button class="linkbtn strong" type="button" data-act="saveSettings">저장</button>`)}
       <div class="sheet-body settings">
-        <p class="note">키를 넣으면 <b>명함 사진</b>을 찍을 때 AI가 글자를 읽습니다. 둘 다 무료이고, 키가 없어도 텍스트 스캔으로 쓸 수 있습니다.
+        <p class="note">키를 넣으면 <b>명함 사진</b>을 찍을 때 AI가 글자를 읽습니다. 둘 다 무료입니다.
           제미나이는 한글을 가장 정확히 읽고, Groq는 아주 빠릅니다. <b>둘 다 넣으면</b> 제미나이가 4초 안에 답하지 않거나 실패할 때 Groq가 이어받습니다.</p>
         <div><p class="group-title">제미나이 (추천)</p><div class="group">
           <div class="field"><label for="gKey">API 키</label>${inp("gKey", gemini.key, "AIza…", true)}</div>
@@ -1191,13 +1051,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     else if (act === "edit" && s) openEdit({ ...s.card });
     else if (act === "contact" && s) addToContacts(s.card);
     else if (act === "recrop" && s) recrop(s);
-    else if (act === "paste") {
-      try {
-        const t = await navigator.clipboard.readText();
-        if (!t.trim()) { showToast("복사된 글자가 없습니다."); return; }
-        $("scanText").value = t; fillFromText(t);
-      } catch { showToast("붙여넣기가 막혔습니다. 위 칸을 길게 눌러 붙여넣기 해 주세요."); }
-    }
+    else if (act === "openSettings") openSettings();
     else if (act === "delete" && s) {
       if (!s.armed) {
         s.armed = true; btn.classList.add("armed"); btn.textContent = "한 번 더 누르면 삭제됩니다";
@@ -1241,7 +1095,6 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   }
 
   // 테스트용 (브라우저 콘솔에서 확인 가능)
-  window.__parseCardText = parseCardText;
   window.__card = { findCardQuad, warpQuad, cardAspect };
   renderList();
   // 키가 있으면 주소에 담아 둠 (홈 화면 아이콘·북마크로 복구 가능)

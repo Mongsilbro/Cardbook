@@ -10,7 +10,7 @@
 |---|---|
 | `index.html` | 앱 전체 (HTML·CSS·JS 한 파일, 빌드 단계 없음) |
 | `manifest.webmanifest`, `apple-touch-icon.png`, `icon-512.png` | 홈 화면 아이콘·이름 |
-| `tests/parser.test.mjs` | 명함 텍스트 분류기 회귀 테스트 (`node tests/parser.test.mjs`) |
+| `tests/phone.test.mjs` | 전화번호 형식 정리 회귀 테스트 (`node tests/phone.test.mjs`) |
 | `ios/` | 초기에 만든 SwiftUI 네이티브 앱 (Vision OCR, Contacts). Mac이 없어 **현재 사용하지 않음**. 참고용 |
 
 `index.html` 스크립트 구획 (주석 `// ===== ... =====`로 구분):
@@ -19,10 +19,8 @@
   같거나 최신이면 그것(사진 포함)을 쓰고, 아니면 빠진 사진만 IndexedDB에서 채움. (예전엔 이때 사진이 영구 삭제되던 버그가 있었음)
   AI 설정(`{key, model, groq, groqModel}`, 이름은 예전 그대로 gemini)은 `localStorage("cardbook.gemini.v1")` + IndexedDB + 쿠키 `cbk` + **URL 해시 `#k=<base64url JSON>`**.
   해시는 홈 화면 아이콘 URL에 키를 담아 저장소가 지워져도 복구하려는 목적. `navigator.storage.persist()` 요청.
-- **parser** (`parseCardText`): 줄 단위 규칙 기반 분류. 정규식(이메일·전화·웹·주소), 직함 사전 `TITLES`,
-  성씨 `SURNAMES`, 회사 키워드 `COMPANY_WORDS`. 분류 못 한 줄은 `memo`로. `ios/.../CardParser.swift`를 JS로 옮긴 것.
-  전화: `010`대는 휴대폰, 라벨에 fax/팩스/F면 팩스, 나머지 사무실. `+82`는 `0`으로 정규화.
-- **AI 읽기 (선택, `readCard`)**: 무료 AI 두 곳. 키는 둘 다 브라우저에서 바로 호출(CORS 허용 확인함).
+- **전화번호** (`normalizePhone`): `010-1234-5678`·`02-123-4567`·`1588-1234` 꼴로 통일, `+82`는 `0`으로. AI 결과와 손 입력 모두 적용.
+- **AI 읽기 (`readCard`)**: 명함 글자를 읽는 유일한 방법(텍스트 스캔·규칙 분류기는 2026-10 사용자 요청으로 삭제). 무료 AI 두 곳. 키는 둘 다 브라우저에서 바로 호출(CORS 허용 확인함).
   - **제미나이(주)**: `generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`, JSON 응답.
     기본 모델 `gemini-3.5-flash-lite`(2026-10 기준 제미나이 중 가장 빠름, 한글 정확도 좋음, 무료). 예전 기본값 `gemini-3.6-flash`로
     저장된 설정은 `OLD_MODELS`로 새 기본값으로 바꿔 씀. 모델 칸이 기본값이면 빈 문자열로 저장(기본값이 바뀌면 따라가게).
@@ -42,8 +40,9 @@
 - **중복 감지** (`findDuplicate`, `mergeCards`): 새 명함 저장 때 휴대폰·이메일이 같거나 이름+사무실 전화가 같으면
   '기존 명함에 합치기 / 따로 저장'을 물음. 합치면 새 내용 우선, 빈 칸은 기존 유지, 메모는 이어 붙임. 저장 때 전화번호는 `normalizePhone`으로 형식 통일.
 - **내보내기**: 백업(JSON), 전체 vCard, 엑셀용 CSV(UTF-8 BOM, 등록일 포함).
-- **UI**: 목록(검색: 이름·회사·부서·직함·이메일·웹·주소·메모·전화 숫자) → 시트(새 명함/편집/상세/설정/백업). 새 명함 화면의 텍스트 칸은 iOS **텍스트 스캔(Live Text)**으로
-  입력받아 350ms 디바운스 후 자동 분류. 사용자가 직접 고친 칸(`sheet.dirty`)은 자동 채우기가 덮어쓰지 않음.
+- **UI**: 목록(검색: 이름·회사·부서·직함·이메일·웹·주소·메모·전화 숫자) → 시트(새 명함/편집/상세/설정/백업).
+  AI 키가 있으면 '명함 추가' 한 번에 사진 고르기(카메라)가 바로 열림(같은 탭 처리 안에서 `input.click()`).
+  키가 없으면 새 명함 화면에 'AI 설정 열기'와 사진 첨부만. 사용자가 직접 고친 칸(`sheet.dirty`)은 AI 결과가 덮어쓰지 않음.
 
 ## 지켜야 할 것
 
@@ -52,13 +51,14 @@
 - 입력칸 글자 크기 16px 이상 (iOS 자동 확대 방지), safe-area inset 유지.
 - 글꼴은 아이폰 시스템 글꼴(SF + Apple SD Gothic Neo, `--font-body`). 웹 글꼴 쓰지 않음(가독성·로딩). 숫자는 `tabular-nums`, 본문 16px·보조 글자 14px 이상, 한글 줄바꿈 `keep-all`.
 - 라이트/다크 모드 모두 `:root` 토큰으로 처리.
-- 분류 규칙을 바꾸면 `tests/parser.test.mjs`에 사례를 추가하고 통과 확인.
+- 전화번호 규칙을 바꾸면 `tests/phone.test.mjs`에 사례를 추가하고 통과 확인.
 
 ## 테스트
 
-- 분류기: `node tests/parser.test.mjs`
+- 전화번호: `node tests/phone.test.mjs`
 - 화면·저장: `python3 -m http.server` 후 Playwright로 열어 확인 (설정 저장 → 저장소 삭제 → 복구 등).
-- iOS 전용 동작(텍스트 스캔, .vcf → 연락처 화면, 홈 화면 앱)은 자동 테스트 불가 → 사용자에게 확인 요청.
+- iOS 전용 동작(카메라, .vcf → 연락처 화면, 홈 화면 앱)은 자동 테스트 불가 → 사용자에게 확인 요청.
+- AI 호출은 Playwright `page.route`로 가짜 응답을 만들어 확인(실제 키 없음).
 
 ## 배포
 
@@ -78,4 +78,4 @@ push 권한이 있으면 커밋·푸시하면 1~2분 뒤 반영된다고 사용�
 ## 추가 기능 후보 (사용자 요청 시)
 
 - 명함 앞/뒷면 2장 보관, 태그·만난 날짜
-- 분류 정확도 개선: 실제 명함에서 틀린 사례를 받아 테스트에 추가하며 규칙 보강
+- AI 읽기 정확도: 실제 명함에서 틀린 사례를 받아 프롬프트(`PROMPT`) 보강
