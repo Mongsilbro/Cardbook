@@ -140,7 +140,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 .foot { font-size: 13px; color: var(--muted); text-align: center; }
 .settings .field input { font-family: var(--font-mono); font-size: 16px; }
 .photobox { display: grid; gap: 2px; }
-.photobox .linkbtn { justify-self: center; font-size: 15px; }
+.photo-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 12px; }
+.photobox .linkbtn { font-size: 15px; }
 .crop { position: fixed; inset: 0; z-index: 30; background: var(--bg); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 .crop-area { flex: 1; min-height: 0; display: grid; place-items: center; padding: 24px max(24px, env(safe-area-inset-left, 0px)) 24px max(24px, env(safe-area-inset-right, 0px)); }
 .crop-fit { position: relative; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
@@ -739,6 +740,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           <div id="readStatus"></div>
         </div>` : ""}
         <div id="photoBox" class="photobox">${photoHtml(card.thumb)}</div>
+        ${isNew ? "" : `<div id="readStatus"></div>`}
         <div><p class="group-title">기본 정보</p><div class="group">
           ${f("name","이름")}${f("company","회사")}${f("department","부서")}${f("jobTitle","직함")}
         </div></div>
@@ -757,7 +759,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     $("photoIn")?.addEventListener("change", onPhoto);
   }
 
-  const photoHtml = (thumb) => thumb ? `<div class="photo"><img src="${esc(thumb)}" alt="명함 사진"></div><button class="linkbtn" type="button" data-act="recrop">명함 영역 다시 맞추기</button>` : "";
+  const photoHtml = (thumb) => thumb ? `<div class="photo"><img src="${esc(thumb)}" alt="명함 사진"></div>
+    <div class="photo-acts"><button class="linkbtn" type="button" data-act="recrop">명함 영역 다시 맞추기</button>${hasKey(gemini) ? `<button class="linkbtn" type="button" data-act="reread">AI로 다시 읽기</button>` : ""}</div>` : "";
   function setPhoto(s, canvas) {
     s.card.thumb = drawScaled(canvas, 720).toDataURL("image/jpeg", 0.7);
     if (sheet === s) $("photoBox").innerHTML = photoHtml(s.card.thumb);
@@ -852,9 +855,10 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       const el = $("f-" + k); if (!el) continue;
       if (sheet.dirty.has(k) && !overwriteAll) continue;
       let v = String(parsed[k] || "").trim();
+      if (!v) continue; // AI가 못 읽은 칸은 있던 내용을 지우지 않음
       if (["mobile", "phone", "fax"].includes(k)) v = normalizePhone(v) || v;
-      if (el.value !== v) { el.value = v; }
-      if (v) n++;
+      if (el.value !== v) el.value = v;
+      n++;
     }
     return n;
   }
@@ -874,12 +878,6 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     URL.revokeObjectURL(loaded.url);
     let found = null;
     try { found = findCardQuad(src); } catch {}
-    const read = (canvas) => {
-      const ac = new AbortController();
-      const p = new Promise(r => canvas.toBlob(r, "image/jpeg", 0.85)).then(b => readCard(b, ac.signal));
-      p.catch(() => {});
-      return { ac, p };
-    };
     const dialog = cropDialog(src, found);
     // 모서리를 맞추는 동안 자동으로 찾은 영역(못 찾았으면 사진 전체)을 미리 제미나이에 보냄
     let pre = null;
@@ -896,9 +894,19 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     // 자동 영역이 틀려 모서리를 크게 옮겼으면 새로 자른 사진으로 다시 읽음
     const far = found && quad && quad.some((p, i) => Math.hypot(p[0] - found[i][0], p[1] - found[i][1]) > 0.04 * Math.hypot(src.width, src.height));
     if (far) { pre.ac.abort(); pre = read(big); }
+    await aiFill(s, pre.p);
+  }
+  function read(canvas) {
+    const ac = new AbortController();
+    const p = new Promise(r => canvas.toBlob(r, "image/jpeg", 0.85)).then(b => readCard(b, ac.signal));
+    p.catch(() => {});
+    return { ac, p };
+  }
+  async function aiFill(s, promise) {
+    s.reading = true;
     setStatus("AI가 명함을 읽고 있습니다…", "busy");
     try {
-      const result = await pre.p;
+      const result = await promise;
       if (sheet !== s) return;
       const n = fillFields(result.data || {}, false);
       setStatus(n ? `칸을 채웠습니다(${result.by}). 틀린 곳을 고친 뒤 저장하세요.` : "글자를 찾지 못했습니다. 명함이 잘 보이게 다시 찍거나 직접 입력해 주세요.");
@@ -907,10 +915,23 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       const st = err?.status, who = err?.provider || "AI";
       const msg = st === 400 || st === 401 || st === 403 ? `${who} API 키가 맞지 않거나 모델 이름이 틀렸습니다. AI 설정을 확인해 주세요.`
         : st === 404 ? `${who} 모델을 찾을 수 없습니다. AI 설정에서 모델 이름을 확인해 주세요.`
-        : st === 429 ? `${who} 무료 한도에 걸렸습니다. 잠시 후 다시 찍거나 직접 입력해 주세요.`
-        : `${who}에서 읽지 못했습니다. 인터넷 연결을 확인하고 다시 찍거나 직접 입력해 주세요.`;
+        : st === 429 ? `${who} 무료 한도에 걸렸습니다. 잠시 후 사진 아래 'AI로 다시 읽기'를 누르거나 직접 입력해 주세요.`
+        : `${who}에서 읽지 못했습니다. 인터넷 연결을 확인하고 'AI로 다시 읽기'를 누르거나 직접 입력해 주세요.`;
       setStatus(msg, "err");
+    } finally { s.reading = false; }
+  }
+  // 'AI로 다시 읽기': 이번에 찍은 사진이 있으면 그 원본(자른 영역)으로, 저장된 명함이면 보관된 사진으로 다시 읽음
+  async function reread(s) {
+    if (s.reading) return;
+    let canvas;
+    if (s.src) canvas = s.quad ? warpQuad(s.src, s.quad, 1200) : drawScaled(s.src, 1200);
+    else {
+      const img = new Image(); img.src = s.card.thumb;
+      try { await img.decode(); } catch { showToast("사진을 열 수 없습니다."); return; }
+      canvas = drawScaled(img, 1200);
     }
+    if (sheet !== s) return;
+    await aiFill(s, read(canvas).p);
   }
 
   // 같은 사람: 휴대폰이나 이메일이 같거나, 이름과 사무실 전화가 같음 (대표번호는 동료끼리 같을 수 있어 이름도 봄)
@@ -1094,6 +1115,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     else if (act === "edit" && s) openEdit({ ...s.card });
     else if (act === "contact" && s) addToContacts(s.card);
     else if (act === "recrop" && s) recrop(s);
+    else if (act === "reread" && s) reread(s);
     else if (act === "openSettings") openSettings();
     else if (act === "delete" && s) {
       if (!s.armed) {
