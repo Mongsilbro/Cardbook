@@ -54,6 +54,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 .btn:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .btn.danger { color: var(--danger); }
+.linkbtn.discard { color: var(--danger); font-weight: 700; }
 .btn.danger.armed { background: var(--danger); color: var(--surface); border-color: var(--danger); }
 .btn.small { min-height: 38px; padding: 6px 10px; font-size: 15px; }
 .btn[disabled] { opacity: .5; }
@@ -719,7 +720,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   function openEdit(card) {
     const isNew = !card.id;
-    sheet = { kind: "edit", card, dirty: new Set() };
+    sheet = { kind: "edit", card, dirty: new Set(), initial: JSON.stringify({ ...card }) };
     const f = (k, label, o = {}) => {
       const v = esc(card[k] || "");
       const ctrl = o.area
@@ -951,6 +952,12 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     if (c.thumb) m.thumb = c.thumb;
     return m;
   }
+  function hasUnsaved(s) {
+    const now = { ...s.card };
+    for (const [k] of FIELDS) { const el = $("f-" + k); if (el) now[k] = el.value.trim(); }
+    const was = JSON.parse(s.initial);
+    return [...FIELDS.map(([k]) => k), "thumb"].some(k => String(now[k] || "").trim() !== String(was[k] || "").trim());
+  }
   function saveEdit(mode) {
     if (!sheet || sheet.kind !== "edit") return;
     let c = { ...sheet.card };
@@ -1109,7 +1116,16 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const act = btn?.dataset.act;
     if (!act) return;
     const s = sheet;
-    if (act === "close") closeSheet();
+    if (act === "close") {
+      // 편집 중 저장하지 않은 내용(직접 입력·AI가 채운 칸·새 사진)이 있으면 한 번 더 눌러야 닫힘
+      if (s?.kind === "edit" && !s.armedClose && hasUnsaved(s)) {
+        s.armedClose = true; btn.textContent = "버리기"; btn.classList.add("discard");
+        showToast("저장하지 않은 내용이 있습니다. 한 번 더 누르면 버리고 닫습니다.");
+        setTimeout(() => { if (sheet === s && s.armedClose) { s.armedClose = false; btn.textContent = "취소"; btn.classList.remove("discard"); } }, 4000);
+        return;
+      }
+      closeSheet();
+    }
     else if (act === "save") saveEdit();
     else if (act === "saveMerge") saveEdit("merge");
     else if (act === "saveNew") saveEdit("new");
