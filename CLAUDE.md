@@ -12,6 +12,7 @@
 | `manifest.webmanifest`, `apple-touch-icon.png`, `icon-512.png` | 홈 화면 아이콘·이름 |
 | `tests/phone.test.mjs` | 전화번호 형식 정리 회귀 테스트 (`node tests/phone.test.mjs`) |
 | `tests/vcard.test.mjs` | 연락처 파일(vCard) 회귀 테스트 — 이름 나누기(두 글자 성 `COMPOUND`)·이스케이프 (`node tests/vcard.test.mjs`) |
+| `tests/search.test.mjs` | 한글 검색(초성 `ㅎㄱㄷ`·섞어 쓰기·띄어쓰기 무시, `hangulMatch`) 회귀 테스트 (`node tests/search.test.mjs`) |
 | `ios/` | 초기에 만든 SwiftUI 네이티브 앱 (Vision OCR, Contacts). Mac이 없어 **현재 사용하지 않음**. 참고용 |
 
 `index.html` 스크립트 구획 (주석 `// ===== ... =====`로 구분):
@@ -41,7 +42,7 @@
 - **중복 감지** (`findDuplicate`, `mergeCards`): 새 명함 저장 때 휴대폰·이메일이 같거나 이름+사무실 전화가 같으면
   '기존 명함에 합치기 / 따로 저장'을 물음. 합치면 새 내용 우선, 빈 칸은 기존 유지, 메모는 이어 붙임. 저장 때 전화번호는 `normalizePhone`으로 형식 통일.
 - **내보내기**: 백업(JSON), 전체 vCard, 엑셀용 CSV(UTF-8 BOM, 등록일 포함). 백업 시각은 `localStorage("cardbook.backup.v1")`에 남겨 백업 알림(`renderBackupNag`)에 씀.
-- **UI**: 목록(검색: 이름·회사·부서·직함·이메일·웹·주소·메모·전화 숫자) → 시트(새 명함/편집/상세/설정/백업).
+- **UI**: 목록(검색: 이름·회사·부서·직함·이메일·웹·주소·메모·전화 숫자, 한글은 초성·띄어쓰기 무시 `hangulMatch`) → 시트(새 명함/편집/상세/설정/백업).
   AI 키가 있으면 '명함 추가' 한 번에 사진 고르기(카메라)가 바로 열림(같은 탭 처리 안에서 `input.click()`).
   키가 없으면 새 명함 화면에 'AI 설정 열기'와 사진 첨부만. 사용자가 직접 고친 칸(`sheet.dirty`)은 AI 결과가 덮어쓰지 않고, AI가 빈 값으로 답한 칸은 지우지 않음.
   사진 아래 'AI로 다시 읽기'(`reread`): 이번에 찍은 원본(`s.src`·`s.quad`)이 있으면 그것, 저장된 명함이면 보관된 720px 사진으로 다시 읽음.
@@ -57,7 +58,7 @@
 
 ## 테스트
 
-- 전화번호·연락처 파일: `node tests/phone.test.mjs && node tests/vcard.test.mjs`
+- 전화번호·연락처 파일·검색: `node tests/phone.test.mjs && node tests/vcard.test.mjs && node tests/search.test.mjs`
 - 코드를 지울 때는 지운 이름이 다른 곳에서 쓰이지 않는지 `grep`으로 확인 (2026-10 분류기 삭제 때 `COMPOUND`를 같이 지워 연락처 저장이 멈췄음).
 - 화면·저장: `python3 -m http.server` 후 Playwright로 열어 확인 (설정 저장 → 저장소 삭제 → 복구 등).
 - iOS 전용 동작(카메라, .vcf → 연락처 화면, 홈 화면 앱)은 자동 테스트 불가 → 사용자에게 확인 요청.
@@ -95,6 +96,7 @@ push 권한이 있으면 커밋·푸시하면 1~2분 뒤 반영된다고 사용�
 - 2026-10-31 'AI로 다시 읽기'(사진 아래): 한도·네트워크 실패 뒤 다시 찍지 않고 재시도, 저장된 명함도 보관 사진으로 읽기. AI가 빈 칸으로 답하면 있던 내용 안 지움(`fillFields`)
 - 2026-11-01 삭제 되돌리기: 명함 삭제 뒤 6초 동안 알림에 '되돌리기'(같은 자리로 복원). `showToast(msg, {label, run, ms})`로 알림에 버튼 하나
 - 2026-11-02 편집 중 '취소' 실수 방지: 저장 안 한 내용(입력·AI가 채운 칸·새 사진)이 있으면 첫 탭에 빨간 '버리기'로 바뀌고 4초 안에 한 번 더 눌러야 닫힘 (`hasUnsaved`, 열 때 `sheet.initial`과 비교)
+- 2026-11-03 초성 검색: 'ㅎㄱㄷ'→홍길동, '홍ㄱ'처럼 섞어 쓰기, 띄어쓰기 무시 (이름·회사·부서·직함·주소·메모). `tests/search.test.mjs` 추가
 
 ## 추가 기능 후보 (사용자 요청 시)
 
