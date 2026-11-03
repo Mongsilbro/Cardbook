@@ -170,7 +170,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   </button>
 
   <div id="backupNag"></div>
-  <input class="search" id="search" type="search" placeholder="이름, 회사, 전화번호 검색" autocomplete="off">
+  <input class="search" id="search" type="search" placeholder="이름, 회사, 전화번호, 초성(ㅎㄱㄷ) 검색" autocomplete="off">
   <div id="list" class="list"></div>
 
   <div class="links">
@@ -646,10 +646,24 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   // ================= list =================
   let query = "";
+  // 한글 검색: 초성(ㅎㄱㄷ → 홍길동)과 섞어 쓰기(홍ㄱ) 지원, 띄어쓰기는 무시
+  const CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
+  function hangulMatch(text, q) {
+    const t = String(text || "").replace(/\s+/g, "").toLowerCase(), k = q.replace(/\s+/g, "").toLowerCase();
+    if (!k) return false;
+    const same = (ch, qc) => ch === qc || (CHO.includes(qc) && ch >= "가" && ch <= "힣" && CHO[Math.floor((ch.charCodeAt(0) - 0xac00) / 588)] === qc);
+    for (let i = 0; i + k.length <= t.length; i++) {
+      let j = 0;
+      while (j < k.length && same(t[i + j], k[j])) j++;
+      if (j === k.length) return true;
+    }
+    return false;
+  }
   function matches(c, q) {
     if (!q) return true;
     const t = q.toLowerCase();
     if (["name","company","department","jobTitle","email","website","address","memo"].some(k => String(c[k] || "").toLowerCase().includes(t))) return true;
+    if (["name","company","department","jobTitle","address","memo"].some(k => hangulMatch(c[k], q))) return true;
     const dq = digits(q);
     return dq.length >= 3 && ["mobile","phone","fax"].some(k => digits(c[k]).includes(dq));
   }
