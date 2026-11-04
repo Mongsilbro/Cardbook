@@ -60,6 +60,9 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 .btn[disabled] { opacity: .5; }
 .filebtn { position: relative; overflow: hidden; }
 .filebtn input { position: absolute; inset: 0; opacity: 0; font-size: 0; }
+.sortbar { display: flex; justify-content: flex-end; gap: 4px; margin: -6px 0 -6px; }
+.sortbar button { appearance: none; border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; padding: 6px 10px; min-height: 36px; border-radius: 999px; -webkit-tap-highlight-color: transparent; }
+.sortbar button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .search { width: 100%; font: inherit; font-size: 16px; padding: 11px 14px; border-radius: var(--r); border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
 .note { font-size: 14px; color: var(--muted); margin: 0; }
 .note b { color: var(--fg); font-weight: 500; }
@@ -171,6 +174,9 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   <div id="backupNag"></div>
   <input class="search" id="search" type="search" placeholder="이름, 회사, 전화번호, 초성(ㅎㄱㄷ) 검색" autocomplete="off">
+  <div class="sortbar" id="sortbar" role="group" aria-label="정렬" hidden>
+    <button type="button" data-sort="recent">최근 등록순</button><button type="button" data-sort="name">이름순</button>
+  </div>
   <div id="list" class="list"></div>
 
   <div class="links">
@@ -646,6 +652,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   // ================= list =================
   let query = "";
+  const KEY_SORT = "cardbook.sort.v1";
+  let sortMode = load(KEY_SORT, "recent") === "name" ? "name" : "recent";
   // 한글 검색: 초성(ㅎㄱㄷ → 홍길동)과 섞어 쓰기(홍ㄱ) 지원, 띄어쓰기는 무시
   const CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
   function hangulMatch(text, q) {
@@ -702,7 +710,12 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       </div>`;
       return;
     }
+    // 보여 주는 순서만 바꿈(저장 순서는 그대로). 이름순은 이름 없으면 회사 이름으로, 비어 있으면 맨 뒤
+    const sb = $("sortbar"); sb.hidden = cards.length < 2;
+    sb.querySelectorAll("[data-sort]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.sort === sortMode)));
+    const label = (c) => (c.name || c.company || "").trim();
     const shown = cards.filter(c => matches(c, query));
+    if (sortMode === "name") shown.sort((a, b) => !label(a) - !label(b) || label(a).localeCompare(label(b), "ko"));
     if (!shown.length) { list.innerHTML = `<p class="note">'${esc(query)}'에 맞는 명함이 없습니다.</p>`; return; }
     list.innerHTML = shown.map(c => `
       <button class="item" type="button" data-id="${esc(c.id)}">
@@ -714,6 +727,10 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
         </span>
       </button>`).join("");
   }
+  $("sortbar").addEventListener("click", (e) => {
+    const m = e.target.closest("[data-sort]")?.dataset.sort; if (!m || m === sortMode) return;
+    sortMode = m; store(KEY_SORT, m); renderList();
+  });
   $("list").addEventListener("click", (e) => {
     const b = e.target.closest(".item"); if (!b) return;
     const c = cards.find(x => x.id === b.dataset.id); if (c) openDetail(c);
