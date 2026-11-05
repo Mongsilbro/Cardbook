@@ -100,6 +100,11 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 .sheet-body { max-width: 680px; margin: 0 auto; display: grid; gap: 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 40px; }
 .photo { border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
 .photo img { display: block; width: 100%; }
+.photo.zoomable { position: relative; display: block; width: 100%; padding: 0; font: inherit; color: inherit; cursor: zoom-in; -webkit-tap-highlight-color: transparent; }
+.zoom-hint { position: absolute; right: 8px; bottom: 8px; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 14px; }
+.viewer { position: fixed; inset: 0; z-index: 35; background: #000; display: grid; place-items: center; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.viewer img { position: absolute; left: 50%; top: 50%; max-width: none; display: block; border-radius: 6px; transform-origin: center; }
+.viewer-close { position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); appearance: none; border: 0; border-radius: 999px; padding: 8px 16px; min-height: 40px; background: rgba(255, 255, 255, .18); color: #fff; font: inherit; font-size: 16px; }
 .status { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: var(--r); background: var(--accent-soft); font-size: 15px; }
 .status.err { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
 .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
@@ -188,6 +193,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
 <div class="sheet" id="sheet" hidden></div>
 <div class="crop" id="crop" hidden></div>
+<div class="viewer" id="viewer" hidden><img alt="명함 사진 크게 보기"><button class="viewer-close" type="button">닫기</button></div>
 <div class="toast" id="toast" hidden></div>
 
 <script>
@@ -1043,7 +1049,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     openSheet(`
       ${bar(`<button class="linkbtn" type="button" data-act="close">‹ 목록</button>`, "명함", `<button class="linkbtn" type="button" data-act="edit">편집</button>`)}
       <div class="sheet-body">
-        ${c.thumb ? `<div class="photo"><img src="${esc(c.thumb)}" alt="명함 사진"></div>` : ""}
+        ${c.thumb ? `<button class="photo zoomable" type="button" data-act="view" aria-label="명함 사진 크게 보기"><img src="${esc(c.thumb)}" alt="명함 사진"><span class="zoom-hint">눌러서 크게 보기</span></button>` : ""}
         <div class="hero-name">
           <span class="n">${esc(c.name || "이름 없음")}${c.jobTitle ? `<small>${esc(c.jobTitle)}</small>` : ""}</span>
           ${c.company || c.department ? `<span class="o">${esc([c.company, c.department].filter(Boolean).join(" · "))}</span>` : ""}
@@ -1163,6 +1169,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     else if (act === "edit" && s) openEdit({ ...s.card });
     else if (act === "contact" && s) addToContacts(s.card);
     else if (act === "recrop" && s) recrop(s);
+    else if (act === "view" && s?.card.thumb) openViewer(s.card.thumb);
     else if (act === "reread" && s) reread(s);
     else if (act === "openSettings") openSettings();
     else if (act === "delete" && s) {
@@ -1204,6 +1211,20 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     }
   });
 
+  // 명함 사진 크게 보기: 세로 화면에서 가로 명함은 90도 돌려 화면을 꽉 채움. 아무 데나 누르면 닫힘
+  function openViewer(src) {
+    const v = $("viewer"), img = v.querySelector("img");
+    const fit = () => {
+      const W = innerWidth - 24, H = innerHeight - 96, r = img.naturalWidth / img.naturalHeight || 1.8;
+      const turn = r > 1 && H > W;
+      const w = turn ? Math.min(H, W * r) : Math.min(W, H * r);
+      img.style.width = w + "px"; img.style.transform = "translate(-50%, -50%)" + (turn ? " rotate(90deg)" : "");
+    };
+    img.onload = fit; img.src = src; v.hidden = false; fit();
+    const close = () => { v.hidden = true; removeEventListener("resize", fit); removeEventListener("keydown", onKey); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    v.onclick = close; addEventListener("resize", fit); addEventListener("keydown", onKey);
+  }
   let toastTimer;
   // action: { label, run, ms } — 알림 오른쪽에 버튼 하나 (예: 삭제 되돌리기)
   function showToast(msg, action) {
