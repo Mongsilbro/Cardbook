@@ -1123,7 +1123,9 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       try {
         const arr = JSON.parse(await file.text());
         if (!Array.isArray(arr)) throw 0;
-        let added = 0;
+        // 같은 명함이 이미 있으면 더 최근에 고친 쪽을 남김 (옛 백업이 그 뒤에 고친 내용을 덮지 않게). 사진은 한쪽에만 있어도 살림
+        const at = (x) => Number(x.updatedAt) || Number(x.createdAt) || 0;
+        let added = 0, replaced = 0, kept = 0;
         for (const raw of arr) {
           if (!raw || typeof raw !== "object") continue;
           const c = { ...blankCard(), thumb: "" };
@@ -1131,11 +1133,14 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           c.thumb = typeof raw.thumb === "string" && raw.thumb.startsWith("data:image/") ? raw.thumb : "";
           c.id = typeof raw.id === "string" ? raw.id : newId();
           c.createdAt = Number(raw.createdAt) || Date.now();
+          if (Number(raw.updatedAt)) c.updatedAt = Number(raw.updatedAt);
           const i = cards.findIndex(x => x.id === c.id);
-          if (i >= 0) cards[i] = c; else { cards.push(c); added++; }
+          if (i < 0) { cards.push(c); added++; }
+          else if (at(c) > at(cards[i])) { if (!c.thumb) c.thumb = cards[i].thumb || ""; cards[i] = c; replaced++; }
+          else { if (!cards[i].thumb && c.thumb) cards[i] = { ...cards[i], thumb: c.thumb }; kept++; }
         }
         sortCards(); saveCards(); renderList();
-        showToast(`복원했습니다 (새 명함 ${added}장)`);
+        showToast(`복원했습니다: 새 명함 ${added}장` + (replaced ? `, 백업이 더 최신인 ${replaced}장 바꿈` : "") + (kept ? `, 이 아이폰 쪽이 최신인 ${kept}장 그대로` : ""));
         closeSheet();
       } catch { showToast("백업 파일을 읽지 못했습니다."); }
     });
@@ -1232,7 +1237,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     t.innerHTML = esc(msg) + (action ? ` <button class="toast-act" type="button">${esc(action.label)}</button>` : "");
     t.hidden = false;
     if (action) t.querySelector(".toast-act").onclick = () => { clearTimeout(toastTimer); t.hidden = true; action.run(); };
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, action?.ms || 2800);
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, action?.ms || Math.max(2800, msg.length * 80)); // 긴 알림은 읽을 시간만큼 더
   }
 
   // 테스트용 (브라우저 콘솔에서 확인 가능)
