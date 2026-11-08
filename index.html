@@ -366,6 +366,29 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     }
   }
 
+  // AI 설정 '연결 확인': 입력칸의 키·모델로 모델 정보만 조회(무료 한도를 쓰지 않음)
+  async function checkProvider(name, url, headers, ok) {
+    try {
+      const res = await fetch(url, { headers });
+      if (res.ok && (!ok || ok(await res.json()))) return { name, good: true, msg: "연결됨" };
+      if (res.ok) return { name, good: false, msg: "키는 맞지만 모델 이름을 찾을 수 없습니다" };
+      const st = res.status;
+      return { name, good: false, msg: st === 400 || st === 401 || st === 403 ? "키가 맞지 않습니다" : st === 404 ? "모델 이름을 찾을 수 없습니다" : st === 429 ? "무료 한도에 걸렸습니다(키는 맞음)" : "확인하지 못했습니다 (" + st + ")" };
+    } catch { return { name, good: false, msg: "인터넷 연결을 확인해 주세요" }; }
+  }
+  async function testKeys() {
+    const box = $("keyCheck"); if (!box) return;
+    const gk = $("gKey").value.trim(), gm = $("gModel").value.trim() || DEFAULT_MODEL;
+    const qk = $("qKey").value.trim(), qm = $("qModel").value.trim() || DEFAULT_GROQ_MODEL;
+    if (!gk && !qk) { box.innerHTML = `<div class="status err">키를 먼저 넣어 주세요.</div>`; return; }
+    box.innerHTML = `<div class="status"><span class="spinner" aria-hidden="true"></span>확인하고 있습니다…</div>`;
+    const jobs = [];
+    if (gk) jobs.push(checkProvider("제미나이", `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(gm)}`, { "x-goog-api-key": gk }));
+    if (qk) jobs.push(checkProvider("Groq", "https://api.groq.com/openai/v1/models", { "Authorization": "Bearer " + qk }, (j) => (j?.data || []).some(m => m.id === qm)));
+    const results = await Promise.all(jobs);
+    if (!$("keyCheck")) return;
+    box.innerHTML = results.map(r => `<div class="status ${r.good ? "" : "err"}">${r.good ? "✓" : "✕"} ${esc(r.name)}: ${esc(r.msg)}</div>`).join("");
+  }
   async function readCard(jpegBlob, signal) {
     const b64 = await new Promise((res, rej) => {
       const fr = new FileReader();
@@ -1110,6 +1133,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           <li><a href="https://console.groq.com/keys" target="_blank" rel="noopener" style="color:var(--accent)">GroqCloud</a>에 구글 계정 등으로 가입 (카드 등록 없음)</li>
           <li><b>Create API Key</b>로 키를 만들어 위 칸에 붙여넣기</li>
         </ol>
+        <button class="btn" type="button" data-act="testKeys">연결 확인</button>
+        <div id="keyCheck" class="stack"></div>
         <p class="note">키는 이 아이폰에만 저장되고, 명함 사진은 키를 넣은 회사(구글·Groq)로만 보냅니다.</p>
         ${hasKey(gemini) ? `<div class="status"><span>키가 저장되어 있습니다. 키를 다시 넣지 않으려면 <b>아래 순서로 홈 화면 아이콘을 한 번 다시 만들어 주세요.</b></span></div>
         <ol class="steps">
@@ -1216,6 +1241,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       if (hasKey(gemini)) { openSettings(); showToast("저장했습니다. 아래 안내대로 홈 화면에 추가해 주세요"); }
       else { closeSheet(); showToast("설정을 저장했습니다"); }
     }
+    else if (act === "testKeys") testKeys();
     else if (act === "clearKey") {
       saveGemini({ key: "", model: geminiModel(), groq: "", groqModel: "" }); closeSheet(); showToast("키를 지웠습니다");
     }
