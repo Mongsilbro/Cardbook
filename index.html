@@ -124,7 +124,9 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
 .group { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
 .group-title { font-size: 13px; color: var(--muted); letter-spacing: .02em; margin: 0 0 6px 4px; font-weight: 500; }
-.field { display: grid; grid-template-columns: 76px 1fr; align-items: center; gap: 8px; padding: 4px 12px; border-top: 1px solid var(--line); }
+.field { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 8px; padding: 4px 12px; border-top: 1px solid var(--line); }
+.field.ai-filled { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.field.ai-filled label::after { content: "AI"; margin-left: 6px; padding: 0 5px; border-radius: 4px; background: var(--accent); color: var(--accent-fg); font-size: 14px; font-weight: 700; line-height: 1.3; }
 .field:first-child { border-top: 0; }
 .field label { color: var(--muted); font-size: 15px; }
 .field input, .field textarea { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 16px; padding: 10px 0; resize: vertical; }
@@ -835,7 +837,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       </div>`);
 
     // 사용자가 직접 고친 칸은 자동 채우기에서 덮어쓰지 않음
-    for (const [k] of FIELDS) $("f-" + k)?.addEventListener("input", () => sheet?.dirty.add(k));
+    for (const [k] of FIELDS) $("f-" + k)?.addEventListener("input", (e) => { sheet?.dirty.add(k); e.target.closest(".field")?.classList.remove("ai-filled"); });
     $("photoIn")?.addEventListener("change", onPhoto);
   }
 
@@ -938,6 +940,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       if (!v) continue; // AI가 못 읽은 칸은 있던 내용을 지우지 않음
       if (["mobile", "phone", "fax"].includes(k)) v = normalizePhone(v) || v;
       if (el.value !== v) el.value = v;
+      el.closest(".field")?.classList.add("ai-filled"); // AI가 채운 칸 표시, 직접 고치면 지움
       n++;
     }
     return n;
@@ -989,7 +992,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       const result = await promise;
       if (sheet !== s) return;
       const n = fillFields(result.data || {}, false);
-      setStatus(n ? `칸을 채웠습니다(${result.by}). 틀린 곳을 고친 뒤 저장하세요.` : "글자를 찾지 못했습니다. 명함이 잘 보이게 다시 찍거나 직접 입력해 주세요.");
+      setStatus(n ? `칸을 채웠습니다(${result.by}). 색칠된 칸이 AI가 채운 칸이니 확인하고 저장하세요.` : "글자를 찾지 못했습니다. 명함이 잘 보이게 다시 찍거나 직접 입력해 주세요.");
     } catch (err) {
       if (sheet !== s) return;
       const st = err?.status, who = err?.provider || "AI";
