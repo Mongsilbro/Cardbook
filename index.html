@@ -77,6 +77,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   background: var(--surface-2); border: 1px solid var(--line);
   display: grid; place-items: center; color: var(--muted); font-family: var(--font-mono); font-size: 11px;
 }
+.thumb .initial { width: 100%; height: 100%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-family: var(--font-body); font-size: 26px; font-weight: 700; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .item .meta { min-width: 0; display: grid; gap: 2px; }
 .item .name { font-weight: 700; font-size: 16px; }
@@ -768,7 +769,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     if (!shown.length) { list.innerHTML = `<p class="note">'${esc(query)}'에 맞는 명함이 없습니다.</p>`; return; }
     list.innerHTML = shown.map(c => `
       <button class="item" type="button" data-id="${esc(c.id)}">
-        <span class="thumb">${c.thumb ? `<img src="${esc(c.thumb)}" alt="">` : "명함"}</span>
+        <span class="thumb">${c.thumb ? `<img src="${esc(c.thumb)}" alt="">` : `<span class="initial" aria-hidden="true">${esc(([...(c.name || c.company || "명").trim()][0] || "명").toUpperCase())}</span>`}</span>
         <span class="meta">
           <span class="name">${esc(c.name || "이름 없음")}${c.jobTitle ? `<small>${esc(c.jobTitle)}</small>` : ""}</span>
           <span class="org">${esc([c.company, c.department].filter(Boolean).join(" · ") || "회사 정보 없음")}</span>
