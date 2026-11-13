@@ -806,7 +806,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       const v = esc(card[k] || "");
       const ctrl = o.area
         ? `<textarea id="f-${k}" rows="${o.rows || 2}">${v}</textarea>`
-        : `<input id="f-${k}" value="${v}" ${o.type ? `type="${o.type}"` : ""} ${o.mode ? `inputmode="${o.mode}"` : ""} autocomplete="off" autocapitalize="off" autocorrect="off">`;
+        : `<input id="f-${k}" value="${v}" ${o.type ? `type="${o.type}"` : ""} ${o.mode ? `inputmode="${o.mode}"` : ""} enterkeyhint="next" autocomplete="off" autocapitalize="off" autocorrect="off">`;
       return `<div class="field ${o.mono ? "mono" : ""}"><label for="f-${k}">${label}</label>${ctrl}</div>`;
     };
     const geminiOn = hasKey(gemini);
@@ -839,6 +839,13 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
     // 사용자가 직접 고친 칸은 자동 채우기에서 덮어쓰지 않음
     for (const [k] of FIELDS) $("f-" + k)?.addEventListener("input", (e) => { sheet?.dirty.add(k); e.target.closest(".field")?.classList.remove("ai-filled"); });
+    // 키보드 '다음'으로 다음 칸으로 (한글 조합 중인 엔터는 무시, 주소·메모 칸은 줄바꿈 그대로)
+    const order = FIELDS.map(([k]) => $("f-" + k)).filter(Boolean);
+    order.forEach((el, i) => el.tagName === "INPUT" && el.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      order[i + 1]?.focus();
+    }));
     $("photoIn")?.addEventListener("change", onPhoto);
   }
 
