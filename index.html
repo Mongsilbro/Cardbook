@@ -262,8 +262,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     idb.set(KEY_GEMINI, g);
     setCookie("cbk", hasKey(g) ? JSON.stringify(g) : "");
     try {
-      if (hasKey(g)) history.replaceState(null, "", keyHashUrl(g));
-      else history.replaceState(null, "", location.pathname);
+      if (hasKey(g)) history.replaceState(history.state, "", keyHashUrl(g));
+      else history.replaceState(history.state, "", location.pathname);
     } catch {}
   }
 
@@ -795,8 +795,27 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   // ================= sheets =================
   let sheet = null;
-  function openSheet(html) { const s = $("sheet"); s.innerHTML = html; s.hidden = false; s.scrollTop = 0; document.body.style.overflow = "hidden"; }
-  function closeSheet() { $("sheet").hidden = true; $("sheet").innerHTML = ""; sheet = null; document.body.style.overflow = ""; }
+  // 시트를 열 때 방문 기록을 하나 쌓아, 아이폰 뒤로 밀기(뒤로 가기)가 앱을 떠나지 않고 시트를 닫게 함
+  let ignorePop = false;
+  function openSheet(html) {
+    const s = $("sheet"); s.innerHTML = html; s.hidden = false; s.scrollTop = 0; document.body.style.overflow = "hidden";
+    if (!history.state?.sheet) history.pushState({ sheet: 1 }, "", location.href);
+  }
+  function closeSheet() {
+    $("sheet").hidden = true; $("sheet").innerHTML = ""; sheet = null; document.body.style.overflow = "";
+    if (history.state?.sheet) { ignorePop = true; history.back(); }
+  }
+  addEventListener("popstate", () => {
+    // 뒤로 간 기록이 키 저장 전 주소일 수 있으니 '#k=' 키 주소를 되살림
+    if (hasKey(gemini) && !geminiFromHash()) { try { history.replaceState(history.state, "", keyHashUrl(gemini)); } catch {} }
+    if (ignorePop) { ignorePop = false; return; }
+    if ($("sheet").hidden) return;
+    history.pushState({ sheet: 1 }, "", location.href); // 일단 되돌려 놓고 아래에서 닫을지 정함
+    if (!$("viewer").hidden) { $("viewer").click(); return; } // 크게 보기만 닫기
+    if (!$("crop").hidden) return;                           // 명함 영역 화면은 완료/취소로만
+    $("sheet").querySelector(".sheet-bar [data-act=close]")?.click(); // '취소'와 같은 처리(저장 안 한 내용이 있으면 한 번 더)
+  });
+  if (history.state?.sheet) history.replaceState(null, "", location.href); // 새로고침 뒤 남은 표시 정리
   const bar = (left, title, right) => `<div class="sheet-bar"><div class="in">${left}<h2>${title}</h2>${right || "<span style=\"width:48px\"></span>"}</div></div>`;
 
   function openEdit(card) {
