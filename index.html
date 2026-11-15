@@ -290,7 +290,11 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   // ================= 전화번호 =================
   // 010-1234-5678 · 02-123-4567 · 1588-1234 꼴로. +82는 0으로. 알아볼 수 없는 형식이면 null
+  // 대표번호 범위(02-555-1234~5)와 내선(내선 12·ext. 12·#12): 숫자에 섞으면 다른 번호가 되므로 떼어서 다룸
+  const PHONE_SFX = /^(.*?\d)\s*(?:~\s*(\d{1,4})|\(?\s*(?:내선|ext\.?|x|#)\s*(\d{1,6})\s*\)?)\s*$/i;
   function normalizePhone(raw) {
+    const sfx = String(raw || "").match(PHONE_SFX);
+    if (sfx) { const base = normalizePhone(sfx[1]); return base && (sfx[2] ? base + "~" + sfx[2] : base + " 내선 " + sfx[3]); }
     let d = digits(raw);
     if (d.startsWith("82") && d.length >= 10) { d = d.slice(2); if (!d.startsWith("0")) d = "0" + d; }
     if (d.length === 8 && !d.startsWith("0")) return d.slice(0, 4) + "-" + d.slice(4);
@@ -299,6 +303,12 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const mid = d.slice(a, -4);
     if (mid.length < 3 || mid.length > 4) return null;
     return d.slice(0, a) + "-" + mid + "-" + d.slice(-4);
+  }
+  // 전화 걸기(tel:)·연락처 파일용: 범위는 빼고 대표번호만, 내선은 쉼표(잠시 멈춤) 뒤에
+  function dialable(raw) {
+    const n = normalizePhone(raw) || String(raw || "");
+    const m = n.match(PHONE_SFX);
+    return m ? digits(normalizePhone(m[1]) || m[1]) + (m[3] ? "," + m[3] : "") : digits(n);
   }
 
   // ================= AI 읽기 (선택: 제미나이 + Groq) =================
@@ -659,9 +669,10 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const L = ["BEGIN:VCARD", "VERSION:3.0", `N:${vEsc(fam)};${vEsc(giv)};;;`, `FN:${vEsc(c.name || c.company || "명함")}`];
     if (c.company || c.department) L.push(`ORG:${vEsc(c.company)}${c.department ? ";" + vEsc(c.department) : ""}`);
     if (c.jobTitle) L.push(`TITLE:${vEsc(c.jobTitle)}`);
-    if (c.mobile) L.push(`TEL;TYPE=CELL:${c.mobile}`);
-    if (c.phone) L.push(`TEL;TYPE=WORK,VOICE:${c.phone}`);
-    if (c.fax) L.push(`TEL;TYPE=WORK,FAX:${c.fax}`);
+    const tel = (v) => PHONE_SFX.test(v) ? dialable(v) : v; // 범위·내선이 붙은 번호는 걸 수 있는 꼴로 (내선은 쉼표 뒤)
+    if (c.mobile) L.push(`TEL;TYPE=CELL:${tel(c.mobile)}`);
+    if (c.phone) L.push(`TEL;TYPE=WORK,VOICE:${tel(c.phone)}`);
+    if (c.fax) L.push(`TEL;TYPE=WORK,FAX:${tel(c.fax)}`);
     if (c.email) L.push(`EMAIL;TYPE=INTERNET,WORK:${c.email}`);
     if (c.website) L.push(`URL:${vEsc(c.website)}`);
     if (c.address) L.push(`ADR;TYPE=WORK:;;${vEsc(c.address)};;;;`);
@@ -1102,7 +1113,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   function openDetail(c, justSaved) {
     sheet = { kind: "detail", card: c, armed: false };
-    const tel = (v) => v ? `<a href="tel:${esc(digits(v))}">${esc(v)}</a>` : "";
+    const tel = (v) => v ? `<a href="tel:${esc(dialable(v))}">${esc(v)}</a>` : "";
     const row = (label, value, o = {}) => !value ? "" : `<div class="row"><span class="k">${label}</span><span class="v ${o.mono ? "mono" : ""}">${o.html || esc(value)}</span><button class="btn small" type="button" data-copy="${esc(value)}">복사</button></div>`;
     const site = c.website ? (/^https?:\/\//i.test(c.website) ? c.website : "https://" + c.website) : "";
     const rows = [
@@ -1117,8 +1128,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const icon = (d) => `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
     const callNum = c.mobile || c.phone;
     const quick = [
-      callNum && `<a class="qbtn" href="tel:${esc(digits(callNum))}">${icon('<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>')}전화</a>`,
-      c.mobile && `<a class="qbtn" href="sms:${esc(digits(c.mobile))}">${icon('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>')}문자</a>`,
+      callNum && `<a class="qbtn" href="tel:${esc(dialable(callNum))}">${icon('<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>')}전화</a>`,
+      c.mobile && `<a class="qbtn" href="sms:${esc(dialable(c.mobile).split(",")[0])}">${icon('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>')}문자</a>`,
       c.email && `<a class="qbtn" href="mailto:${esc(c.email)}">${icon('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>')}메일</a>`,
       `<button class="qbtn" type="button" data-act="share">${icon('<path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/>')}공유</button>`
     ].filter(Boolean).join("");
