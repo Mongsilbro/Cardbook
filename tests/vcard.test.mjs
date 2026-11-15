@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const sec = html.match(/\/\/ =+ vCard[\s\S]*?(?=\s*function downloadFile)/);
 if (!sec) throw new Error("vCard 구획을 index.html에서 찾지 못함");
-const toVCard = new Function(sec[0] + "\nreturn toVCard;")();
+const phone = html.match(/const digits = .*;/)[0] + "\n" + html.match(/\/\/ =+ 전화번호[\s\S]*?(?=\/\/ =+ AI 읽기)/)[0];
+const toVCard = new Function(phone + "\n" + sec[0] + "\nreturn toVCard;")();
 
 const cases = [
   { name: "한국 이름 3글자", card: { name: "홍길동", company: "(주)한빛소프트", department: "개발팀", jobTitle: "팀장", mobile: "010-1234-5678", phone: "02-555-1234", email: "hong@hanbit.co.kr" },
@@ -15,6 +16,8 @@ const cases = [
   { name: "외자 이름", card: { name: "김 결" }, has: ["N:김;결;;;"] },
   { name: "영문 이름", card: { name: "John Smith" }, has: ["N:Smith;John;;;"] },
   { name: "이름 없이 회사만", card: { company: "수원시청" }, has: ["FN:수원시청"] },
+  { name: "범위·내선 번호는 걸 수 있는 꼴로", card: { name: "박대표", phone: "02-555-1234~5", fax: "02-555-1236", mobile: "010-1234-5678 내선 9" },
+    has: ["TEL;TYPE=WORK,VOICE:025551234", "TEL;TYPE=WORK,FAX:02-555-1236", "TEL;TYPE=CELL:01012345678,9"] },
   { name: "특수문자 이스케이프", card: { name: "이영희", address: "서울, 강남구; 1층", memo: "첫줄\n둘째줄" }, has: ["ADR;TYPE=WORK:;;서울\\, 강남구\\; 1층;;;;", "NOTE:첫줄\\n둘째줄"] }
 ];
 let fail = 0;
