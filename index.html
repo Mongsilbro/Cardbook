@@ -753,6 +753,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     downloadFile(`명함첩-백업-${stamp}.json`, JSON.stringify(cards), "application/json");
     store(KEY_BACKUP, { at: Date.now() });
     renderBackupNag();
+    renderStoreInfo();
   }
   $("backupNag").addEventListener("click", (e) => {
     const a = e.target.closest("[data-nag]")?.dataset.nag;
@@ -1194,12 +1195,26 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       </div>`);
   }
 
+  // 백업 화면 위 저장 상태: 아이폰이 이 앱 저장 공간을 지우지 않도록 허용했는지(persisted), 쓰는 용량, 마지막 백업
+  async function renderStoreInfo() {
+    let kept = null, used = 0;
+    try { kept = await navigator.storage?.persisted?.() ?? null; } catch {}
+    try { used = (await navigator.storage?.estimate?.())?.usage || 0; } catch {}
+    const el = $("storeInfo"); if (!el) return;
+    const b = load(KEY_BACKUP, {});
+    const last = b.at ? new Date(b.at).toLocaleDateString("ko-KR", { month: "long", day: "numeric" }) + " 마지막 백업" : "아직 백업한 적 없음";
+    const size = used ? ` · 약 ${used < 1048576 ? Math.max(1, Math.round(used / 1024)) + "KB" : (used / 1048576).toFixed(1) + "MB"}` : "";
+    el.innerHTML = kept
+      ? `<div class="status"><span>✓ 이 아이폰이 명함 저장 공간을 오래 보관하도록 허용했습니다.<br><span class="note">명함 ${cards.length}장${size} · ${last}</span></span></div>`
+      : `<div class="status err"><span>Safari가 이 앱을 오래 열지 않으면 저장된 명함을 지울 수 있습니다(아이폰 저장 정책). 백업 파일을 '파일' 앱에 꼭 저장해 두세요.<br><span class="note">명함 ${cards.length}장${size} · ${last}</span></span></div>`;
+  }
   function openBackup() {
     sheet = { kind: "backup" };
     openSheet(`
       ${bar(`<button class="linkbtn" type="button" data-act="close">닫기</button>`, "백업 · 복원", "")}
       <div class="sheet-body">
         <p class="note">명함은 이 아이폰의 Safari에만 저장됩니다. Safari 방문 기록을 지우면 함께 지워지니 가끔 백업 파일을 '파일' 앱에 저장해 두세요.</p>
+        <div id="storeInfo"></div>
         <div class="stack">
           <button class="btn primary" type="button" data-act="exportJson" ${cards.length ? "" : "disabled"}>백업 파일 저장 (${cards.length}장)</button>
           <label class="btn filebtn">백업 파일에서 복원<input id="importIn" type="file" accept=".json,application/json"></label>
@@ -1207,6 +1222,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           <button class="btn" type="button" data-act="exportCsv" ${cards.length ? "" : "disabled"}>엑셀 파일(CSV)로 저장</button>
         </div>
       </div>`);
+    renderStoreInfo();
     $("importIn").addEventListener("change", async (e) => {
       const file = e.target.files && e.target.files[0]; e.target.value = "";
       if (!file) return;
