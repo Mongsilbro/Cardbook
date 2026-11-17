@@ -57,6 +57,8 @@
 - 입력칸 글자 크기 16px 이상 (iOS 자동 확대 방지), safe-area inset 유지.
 - 글꼴은 아이폰 시스템 글꼴(SF + Apple SD Gothic Neo, `--font-body`). 웹 글꼴 쓰지 않음(가독성·로딩). 숫자는 `tabular-nums`, 본문 16px·보조 글자 14px 이상, 한글 줄바꿈 `keep-all`.
 - 라이트/다크 모드 모두 `:root` 토큰으로 처리.
+- 화면 읽기(VoiceOver): 본문은 `<main id="main">`, 시트·명함 영역·크게 보기는 `role="dialog" aria-modal`. 시트가 열리면 `#main.inert`, 제목에 초점, 닫으면 연 버튼으로 초점 복귀.
+  알림은 `#announce`(role=status)로도 읽힘, 상태 칸(`#readStatus`·`#keyCheck`·`#storeInfo`)은 `aria-live="polite"`. 글자 대비는 두 테마 모두 4.5:1 이상(2026-11-17 측정).
 - 전화번호 규칙을 바꾸면 `tests/phone.test.mjs`에 사례를 추가하고 통과 확인.
 
 ## 테스트
@@ -129,6 +131,7 @@ U=/tmp/upgrade-skills; rm -rf $U && GIT_LFS_SKIP_SMUDGE=1 git clone -q --depth 1
 - 2026-11-14 second-opinion으로 뒤로 밀기 코드 검토 → 지적 6개 중 1개만 실제(닫자마자 다른 시트를 열면 기록이 빠져 다음 뒤로 밀기에 앱을 떠남)로 확인·재현 후 수정
 - 2026-11-15 [버그·tdd] 대표번호 범위 `02-555-1234~5`가 `02-5551-2345`(다른 번호)로 바뀌던 문제와 내선이 전화 걸기에 섞이던 문제: `PHONE_SFX`·`dialable()`, 테스트 먼저 작성(전화번호 24건·연락처 파일 7건)
 - 2026-11-16 [데이터 안전] 백업 화면에 저장 상태: 아이폰이 오래 보관 허용했는지(✓/경고), 사용 용량, 마지막 백업 날짜. search-first로 기존 `persist()` 요청을 확장(새 라이브러리 없음)
+- 2026-11-17 [접근성] VoiceOver 지원: 시트를 대화상자로 알리고 뒤 목록 숨김(inert)·초점 이동/복귀, 알림·AI 결과·연결 확인을 읽어 줌, main 영역. axe-core 검사 0건(목록·상세·편집·설정), 대비 측정 통과
 
 ## 추가 기능 후보 (사용자 요청 시)
 
