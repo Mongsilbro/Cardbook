@@ -187,6 +187,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     명함 추가
   </button>
 
+  <div id="draftNag"></div>
   <div id="backupNag"></div>
   <input class="search" id="search" type="search" placeholder="이름, 회사, 전화번호, 초성(ㅎㄱㄷ) 검색" autocomplete="off">
   <div class="sortbar" id="sortbar" role="group" aria-label="정렬" hidden>
@@ -215,6 +216,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   const KEY_SAVED = "cardbook.savedAt.v1"; // 마지막 저장 시각. localStorage·IndexedDB 중 어느 쪽이 최신인지 가림
   const KEY_BACKUP = "cardbook.backup.v1"; // { at: 마지막 백업 파일 저장 시각, snooze: '나중에'를 누른 뒤 다시 알릴 시각 }
   const KEY_GEMINI = "cardbook.gemini.v1";
+  const KEY_DRAFT = "cardbook.draft.v1"; // 작성 중인 명함(IndexedDB). 사진 찍는 사이 Safari가 페이지를 새로 열어도 이어 쓰기
   const DEFAULT_MODEL = "gemini-3.5-flash-lite"; // 제미나이 중 가장 빠름, 무료
   const OLD_MODELS = ["gemini-3.6-flash"];        // 예전 기본값으로 저장된 설정은 새 기본값으로
   const DEFAULT_GROQ_MODEL = "qwen/qwen3.8-27b";
@@ -886,6 +888,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     if (!history.state?.sheet) history.pushState({ sheet: 1 }, "", location.href);
   }
   function closeSheet() {
+    if (sheet?.kind === "edit") clearDraft(sheet);
     $("sheet").hidden = true; $("sheet").innerHTML = ""; sheet = null; document.body.style.overflow = "";
     $("main").inert = false;
     if (sheetOpener?.isConnected) sheetOpener.focus({ preventScroll: true });
@@ -949,7 +952,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       </div>`);
 
     // 사용자가 직접 고친 칸은 자동 채우기에서 덮어쓰지 않음
-    for (const [k] of FIELDS) $("f-" + k)?.addEventListener("input", (e) => { sheet?.dirty.add(k); e.target.closest(".field")?.classList.remove("ai-filled"); });
+    for (const [k] of FIELDS) $("f-" + k)?.addEventListener("input", (e) => { sheet?.dirty.add(k); e.target.closest(".field")?.classList.remove("ai-filled"); saveDraft(); });
     // 키보드 '다음'으로 다음 칸으로 (한글 조합 중인 엔터는 무시, 주소·메모 칸은 줄바꿈 그대로)
     const order = FIELDS.map(([k]) => $("f-" + k)).filter(Boolean);
     order.forEach((el, i) => el.tagName === "INPUT" && el.addEventListener("keydown", (e) => {
@@ -964,7 +967,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     <div class="photo-acts"><button class="linkbtn" type="button" data-act="recrop">명함 영역 다시 맞추기</button>${hasKey(gemini) ? `<button class="linkbtn" type="button" data-act="reread">AI로 다시 읽기</button>` : ""}</div>` : "";
   function setPhoto(s, canvas) {
     s.card.thumb = drawScaled(canvas, 720).toDataURL("image/jpeg", 0.7);
-    if (sheet === s) $("photoBox").innerHTML = photoHtml(s.card.thumb);
+    if (sheet === s) { $("photoBox").innerHTML = photoHtml(s.card.thumb); saveDraft(true); }
   }
 
   // 모서리 4개를 끌어 명함 영역을 맞추는 화면. 결과: 사각형(자르기) / null(원본 그대로) / undefined(취소)
@@ -1062,6 +1065,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       el.closest(".field")?.classList.add("ai-filled"); // AI가 채운 칸 표시, 직접 고치면 지움
       n++;
     }
+    if (n) saveDraft(true);
     return n;
   }
   function setStatus(msg, kind) {
@@ -1158,6 +1162,66 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const was = JSON.parse(s.initial);
     return [...FIELDS.map(([k]) => k), "thumb"].some(k => String(now[k] || "").trim() !== String(was[k] || "").trim());
   }
+  // 작성 중 임시 저장: 입력·AI 결과·사진이 바뀔 때마다 IndexedDB에 남김. 카메라를 다녀오는 사이 아이폰이 메모리가 모자라
+  // 페이지를 새로 열면 쓰던 내용이 사라지기 때문. 저장하거나 취소로 닫으면 지움
+  let draftTimer = 0;
+  function draftOf(s) {
+    const card = { ...s.card };
+    for (const [k] of FIELDS) { const el = $("f-" + k); if (el) card[k] = el.value; }
+    const ai = FIELDS.map(([k]) => k).filter(k => $("f-" + k)?.closest(".field")?.classList.contains("ai-filled"));
+    return { at: Date.now(), card, dirty: [...s.dirty], ai };
+  }
+  function saveDraft(now) {
+    clearTimeout(draftTimer);
+    const s = sheet;
+    if (s?.kind !== "edit") return;
+    const run = () => {
+      if (sheet !== s) return;
+      if (hasUnsaved(s)) {
+        s.drafted = true; idb.set(KEY_DRAFT, draftOf(s));
+        if (pendingDraft) { pendingDraft = null; renderDraftNag(); } // 예전 임시 저장은 새로 쓰는 것으로 바뀜
+      }
+      else if (s.drafted) { s.drafted = false; idb.set(KEY_DRAFT, null); }
+    };
+    if (now) run(); else draftTimer = setTimeout(run, 400);
+  }
+  function clearDraft(s) {
+    clearTimeout(draftTimer);
+    if (s?.drafted || s?.restored) idb.set(KEY_DRAFT, null);
+  }
+  // 앱을 열 때 남은 임시 저장이 있으면 목록 위에 '이어서 쓰기' (7일 지난 것은 버림)
+  let pendingDraft = null;
+  async function checkDraft() {
+    const d = await idb.get(KEY_DRAFT);
+    pendingDraft = d && d.card && Date.now() - (d.at || 0) < 7 * DAY ? d : null;
+    if (d && !pendingDraft) idb.set(KEY_DRAFT, null);
+    renderDraftNag();
+  }
+  function renderDraftNag() {
+    const d = pendingDraft, el = $("draftNag");
+    if (!d) { el.innerHTML = ""; return; }
+    const who = [d.card.name, d.card.company].map(v => String(v || "").trim()).filter(Boolean).join(" · ") || (d.card.thumb ? "사진만 붙인 명함" : "이름 없는 명함");
+    el.innerHTML = `<div class="nag"><p><b>${d.card.id ? "고치던" : "작성 중이던"} 명함이 있습니다.</b><br>${esc(who)} <span class="note">· ${esc(new Date(d.at).toLocaleString("ko-KR", { month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }))}</span></p>
+      <div class="row2"><button class="btn small primary" type="button" data-draft="resume">이어서 쓰기</button><button class="btn small" type="button" data-draft="drop">버리기</button></div></div>`;
+  }
+  $("draftNag").addEventListener("click", (e) => {
+    const a = e.target.closest("[data-draft]")?.dataset.draft, d = pendingDraft;
+    if (!a || !d) return;
+    pendingDraft = null; renderDraftNag();
+    if (a === "drop") { idb.set(KEY_DRAFT, null); showToast("작성 중이던 명함을 버렸습니다"); return; }
+    // 고치던 명함이 그새 삭제됐으면 새 명함으로
+    const base = (d.card.id && cards.find(x => x.id === d.card.id)) || { ...blankCard(), id: null, thumb: "" };
+    openEdit({ ...base });
+    const s = sheet; s.restored = true;
+    for (const [k] of FIELDS) { const el = $("f-" + k); if (el && d.card[k] != null) el.value = d.card[k]; }
+    (d.ai || []).forEach(k => $("f-" + k)?.closest(".field")?.classList.add("ai-filled"));
+    (d.dirty || []).forEach(k => s.dirty.add(k));
+    if (d.card.thumb !== base.thumb) { s.card.thumb = d.card.thumb || ""; $("photoBox").innerHTML = photoHtml(s.card.thumb); }
+    saveDraft(true);
+  });
+  addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveDraft(true); });
+  addEventListener("pagehide", () => saveDraft(true));
+
   function saveEdit(mode) {
     if (!sheet || sheet.kind !== "edit") return;
     let c = { ...sheet.card };
@@ -1182,6 +1246,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     if (i >= 0) cards[i] = c; else cards.push(c);
     sortCards();
     if (!saveCards()) { showToast("저장하지 못했습니다. Safari 설정에서 방문 기록·웹사이트 데이터 차단을 확인해 주세요."); return; }
+    clearDraft(sheet);
     renderList();
     showToast("저장했습니다");
     openDetail(c, true);
@@ -1445,6 +1510,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     } else if (hasKey(gemini) && !hasKey(idbGem)) {
       idb.set(KEY_GEMINI, gemini);
     }
+    checkDraft();
   })();
 })();
 </script>
