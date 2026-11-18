@@ -67,6 +67,11 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 .note { font-size: 14px; color: var(--muted); margin: 0; }
 .note b { color: var(--fg); font-weight: 500; }
 .list { display: grid; gap: 10px; }
+.swipe { position: relative; border-radius: var(--r); overflow: hidden; }
+.swipe-del { position: absolute; top: 0; right: 0; bottom: 0; width: 88px; appearance: none; border: 0; border-radius: 0 var(--r) var(--r) 0; background: var(--danger); color: var(--surface); font: inherit; font-weight: 700; font-size: 16px; }
+.swipe .item { position: relative; touch-action: pan-y; transition: transform .2s ease; }
+.swipe .item.dragging { transition: none; }
+@media (prefers-reduced-motion: reduce) { .swipe .item { transition: none; } }
 .item {
   display: grid; grid-template-columns: 108px 1fr; gap: 14px; align-items: center; width: 100%;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
@@ -783,6 +788,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     if (sortMode === "name") shown.sort((a, b) => !label(a) - !label(b) || label(a).localeCompare(label(b), "ko"));
     if (!shown.length) { list.innerHTML = `<p class="note">'${esc(query)}'에 맞는 명함이 없습니다.</p>`; return; }
     list.innerHTML = shown.map(c => `
+      <div class="swipe"><button class="swipe-del" type="button" data-del="${esc(c.id)}" tabindex="-1" aria-hidden="true">삭제</button>
       <button class="item" type="button" data-id="${esc(c.id)}">
         <span class="thumb">${c.thumb ? `<img src="${esc(c.thumb)}" alt="">` : `<span class="initial" aria-hidden="true">${esc(([...(c.name || c.company || "명").trim()][0] || "명").toUpperCase())}</span>`}</span>
         <span class="meta">
@@ -790,14 +796,69 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           <span class="org">${esc([c.company, c.department].filter(Boolean).join(" · ") || "회사 정보 없음")}</span>
           ${c.mobile || c.phone ? `<span class="tel">${esc(c.mobile || c.phone)}</span>` : ""}
         </span>
-      </button>`).join("");
+      </button></div>`).join("");
+  }
+  // 실수로 지웠을 때를 위해 6초 동안 '되돌리기' (같은 자리로 복원) — 상세 화면 삭제와 목록 밀어서 삭제가 함께 씀
+  function deleteCard(id) {
+    const i = cards.findIndex(x => x.id === id), gone = cards[i];
+    if (!gone) return;
+    cards = cards.filter(x => x.id !== id); saveCards(); renderList();
+    showToast(`'${gone.name || gone.company || "명함"}' 명함을 삭제했습니다`, { label: "되돌리기", ms: 6000, run: () => {
+      if (cards.some(x => x.id === gone.id)) return;
+      cards.splice(Math.min(i, cards.length), 0, gone); saveCards(); renderList(); showToast("되돌렸습니다");
+    } });
   }
   $("sortbar").addEventListener("click", (e) => {
     const m = e.target.closest("[data-sort]")?.dataset.sort; if (!m || m === sortMode) return;
     sortMode = m; store(KEY_SORT, m); renderList();
   });
+  // 목록에서 왼쪽으로 밀면 빨간 '삭제' 버튼이 나옴(아이폰 메일처럼). 세로 스크롤은 그대로, 가로로 움직일 때만 밀기로 봄
+  const SWIPE_W = 88;
+  let swipe = null, openRow = null, swallowUntil = 0, tapClosesRow = false;
+  const setRow = (item, x, animate) => {
+    item.classList.toggle("dragging", !animate);
+    item.style.transform = x ? `translateX(${x}px)` : "";
+    const del = item.parentElement.querySelector(".swipe-del"), open = x <= -SWIPE_W / 2;
+    del.tabIndex = open ? 0 : -1; del.setAttribute("aria-hidden", String(!open));
+  };
+  const closeOpenRow = () => { if (openRow?.isConnected) setRow(openRow, 0, true); openRow = null; };
+  $("list").addEventListener("pointerdown", (e) => {
+    const item = e.target.closest(".item"); if (!item || e.button > 0) return;
+    tapClosesRow = !!openRow; // 열린 줄이 있을 때의 탭은 닫기만(아이폰 메일처럼)
+    swipe = { item, id: e.pointerId, x0: e.clientX, y0: e.clientY, base: item === openRow ? -SWIPE_W : 0, dir: null, x: 0 };
+  });
+  $("list").addEventListener("pointermove", (e) => {
+    if (!swipe || e.pointerId !== swipe.id) return;
+    const dx = e.clientX - swipe.x0, dy = e.clientY - swipe.y0;
+    if (!swipe.dir) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+        swipe.dir = "x"; swipe.item.setPointerCapture?.(e.pointerId);
+        if (openRow && openRow !== swipe.item) closeOpenRow(); // 다른 줄을 밀면 열려 있던 줄은 닫힘
+      }
+      else if (Math.abs(dy) > 8) { swipe = null; return; }
+      else return;
+    }
+    swipe.x = Math.max(-SWIPE_W - 24, Math.min(0, swipe.base + dx));
+    setRow(swipe.item, swipe.x, false);
+  });
+  const endSwipe = (e) => {
+    if (!swipe || e.pointerId !== swipe.id) return;
+    if (swipe.dir === "x") {
+      const open = swipe.x < -SWIPE_W / 2;
+      setRow(swipe.item, open ? -SWIPE_W : 0, true);
+      openRow = open ? swipe.item : null;
+      swallowUntil = Date.now() + 250; // 민 직후 따라올 수 있는 클릭만 무시(터치로 밀면 클릭이 안 오기도 해서 시간으로 끊음)
+    }
+    swipe = null;
+  };
+  $("list").addEventListener("pointerup", endSwipe);
+  $("list").addEventListener("pointercancel", endSwipe);
   $("list").addEventListener("click", (e) => {
+    if (Date.now() < swallowUntil) return;
+    const del = e.target.closest("[data-del]");
+    if (del) { openRow = null; deleteCard(del.dataset.del); return; }
     const b = e.target.closest(".item"); if (!b) return;
+    if (tapClosesRow || openRow) { tapClosesRow = false; closeOpenRow(); return; } // 열린 줄이 있으면 먼저 닫기만
     const c = cards.find(x => x.id === b.dataset.id); if (c) openDetail(c);
   });
   $("search").addEventListener("input", (e) => { query = e.target.value.trim(); renderList(); });
@@ -1304,13 +1365,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
         setTimeout(() => { if (sheet === s && s.armed) { s.armed = false; btn.classList.remove("armed"); btn.textContent = "명함 삭제"; } }, 4000);
         return;
       }
-      // 실수로 지웠을 때를 위해 6초 동안 '되돌리기' (같은 자리로 복원)
-      const i = cards.findIndex(x => x.id === s.card.id), gone = cards[i];
-      cards = cards.filter(x => x.id !== s.card.id); saveCards(); renderList(); closeSheet();
-      showToast(`'${gone?.name || "명함"}' 명함을 삭제했습니다`, gone && { label: "되돌리기", ms: 6000, run: () => {
-        if (cards.some(x => x.id === gone.id)) return;
-        cards.splice(Math.min(i, cards.length), 0, gone); saveCards(); renderList(); showToast("되돌렸습니다");
-      } });
+      closeSheet(); deleteCard(s.card.id);
     }
     else if (act === "saveSettings") {
       saveGemini({ key: $("gKey").value.trim(), model: $("gModel").value.trim() === DEFAULT_MODEL ? "" : $("gModel").value.trim(), groq: $("qKey").value.trim(), groqModel: $("qModel").value.trim() === DEFAULT_GROQ_MODEL ? "" : $("qModel").value.trim() });
