@@ -288,8 +288,9 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   })();
   try { navigator.storage?.persist?.(); } catch {}
   const sortCards = () => cards.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  let knownAt = load(KEY_SAVED, 0); // 이 탭이 마지막으로 읽거나 쓴 명함 저장 시각
   function saveCards() {
-    const at = Date.now();
+    const at = Math.max(Date.now(), knownAt + 1); knownAt = at;
     idb.set(KEY_CARDS, cards); idb.set(KEY_SAVED, at);
     // localStorage(약 5MB)가 차면 사진을 빼고 글자만 저장. 사진은 IndexedDB(용량 넉넉)에 그대로 있고 앱을 열 때 다시 채움
     const ok = store(KEY_CARDS, cards) || store(KEY_CARDS, cards.map(c => ({ ...c, thumb: "" })));
@@ -1490,9 +1491,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   if (hasKey(gemini) && !geminiFromHash()) { try { history.replaceState(null, "", keyHashUrl(gemini)); } catch {} }
 
   // 두 저장소 맞추기: IndexedDB가 같거나 더 최신이면 그쪽(사진 포함)을 쓰고, 아니면 빠진 사진만 IndexedDB에서 채움
-  (async () => {
-    const [idbCards, idbGem, idbAt] = await Promise.all([idb.get(KEY_CARDS), idb.get(KEY_GEMINI), idb.get(KEY_SAVED)]);
-    const lsAt = load(KEY_SAVED, 0);
+  function adoptStored(idbCards, idbAt, lsAt) {
     if (Array.isArray(idbCards) && idbCards.length) {
       if (!cards.length || (idbAt && idbAt >= lsAt)) {
         cards = idbCards;
@@ -1505,6 +1504,34 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     } else if (cards.length && !idbCards) {
       idb.set(KEY_CARDS, cards);
     }
+    knownAt = Math.max(knownAt, idbAt || 0, lsAt || 0);
+  }
+  // 다른 탭(예: 홈 화면 아이콘으로 새로 연 탭)에서 명함을 바꿨으면 다시 읽음.
+  // 안 그러면 오래 열려 있던 탭에서 저장할 때 그쪽 내용(새 명함·삭제)을 옛 목록으로 덮어씀
+  let syncing = null;
+  function syncFromOtherTab() {
+    return syncing || (syncing = (async () => {
+      try {
+        const lsAt = load(KEY_SAVED, 0), idbAt = (await idb.get(KEY_SAVED)) || 0;
+        if (Math.max(lsAt, idbAt) <= knownAt) return;
+        const idbCards = await idb.get(KEY_CARDS), fresh = load(KEY_CARDS, null);
+        if (idbAt >= lsAt && Array.isArray(idbCards)) cards = idbCards; // 사진까지 있는 쪽
+        else if (Array.isArray(fresh)) {
+          cards = fresh; // localStorage가 꽉 차 사진이 빠졌으면 IndexedDB 것으로 채움
+          const th = new Map((idbCards || []).filter(c => c.thumb).map(c => [c.id, c.thumb]));
+          cards.forEach(c => { if (!c.thumb && th.has(c.id)) c.thumb = th.get(c.id); });
+        } else return;
+        knownAt = Math.max(lsAt, idbAt);
+        sortCards(); renderList();
+      } finally { syncing = null; }
+    })());
+  }
+  addEventListener("storage", (e) => { if (e.key === KEY_SAVED) setTimeout(syncFromOtherTab, 300); }); // IndexedDB 쓰기가 끝나길 잠깐 기다림
+  addEventListener("pageshow", (e) => { if (e.persisted) syncFromOtherTab(); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") syncFromOtherTab(); });
+  (async () => {
+    const [idbCards, idbGem, idbAt] = await Promise.all([idb.get(KEY_CARDS), idb.get(KEY_GEMINI), idb.get(KEY_SAVED)]);
+    adoptStored(idbCards, idbAt, load(KEY_SAVED, 0));
     if (!hasKey(gemini) && hasKey(idbGem)) {
       saveGemini(idbGem);
     } else if (hasKey(gemini) && !hasKey(idbGem)) {
