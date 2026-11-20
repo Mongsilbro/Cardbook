@@ -965,8 +965,9 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   }
 
   const photoHtml = (thumb) => thumb ? `<div class="photo"><img src="${esc(thumb)}" alt="명함 사진"></div>
-    <div class="photo-acts"><button class="linkbtn" type="button" data-act="recrop">명함 영역 다시 맞추기</button>${hasKey(gemini) ? `<button class="linkbtn" type="button" data-act="reread">AI로 다시 읽기</button>` : ""}</div>` : "";
+    <div class="photo-acts"><button class="linkbtn" type="button" data-act="rotate">사진 돌리기<span aria-hidden="true"> ↻</span></button><button class="linkbtn" type="button" data-act="recrop">명함 영역 다시 맞추기</button>${hasKey(gemini) ? `<button class="linkbtn" type="button" data-act="reread">AI로 다시 읽기</button>` : ""}</div>` : "";
   function setPhoto(s, canvas) {
+    s.full = canvas; s.rot = 0; // 돌리기는 이 큰 사진에서 다시 그려 화질이 떨어지지 않게
     s.card.thumb = drawScaled(canvas, 720).toDataURL("image/jpeg", 0.7);
     if (sheet === s) { $("photoBox").innerHTML = photoHtml(s.card.thumb); saveDraft(true); }
   }
@@ -1039,6 +1040,27 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       addEventListener("resize", layout);
       layout(); draw();
     });
+  }
+  // 옆으로·거꾸로 찍힌 명함 사진을 오른쪽으로 90도씩 돌림 (저장된 명함은 보관된 사진에서)
+  function rotated(src, k) {
+    const cv = document.createElement("canvas"), w = src.width, h = src.height;
+    [cv.width, cv.height] = k % 2 ? [h, w] : [w, h];
+    const g = cv.getContext("2d");
+    g.translate(cv.width / 2, cv.height / 2); g.rotate(k * Math.PI / 2); g.drawImage(src, -w / 2, -h / 2);
+    return cv;
+  }
+  async function rotatePhoto(s) {
+    if (!s.full) {
+      const img = new Image(); img.src = s.card.thumb;
+      try { await img.decode(); } catch { showToast("사진을 열 수 없습니다."); return; }
+      if (sheet !== s) return;
+      s.full = drawScaled(img, 2000); s.rot = 0;
+    }
+    s.rot = ((s.rot || 0) + 1) % 4;
+    s.card.thumb = drawScaled(rotated(s.full, s.rot), 720).toDataURL("image/jpeg", 0.7);
+    $("photoBox").innerHTML = photoHtml(s.card.thumb);
+    $("photoBox").querySelector("[data-act=rotate]")?.focus({ preventScroll: true }); // 연달아 누를 수 있게(화면 읽기 초점 유지)
+    saveDraft(true);
   }
   async function recrop(s) {
     let src = s.src, quad = s.quad;
@@ -1422,6 +1444,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     else if (act === "contact" && s) addToContacts(s.card);
     else if (act === "share" && s) shareCard(s.card);
     else if (act === "recrop" && s) recrop(s);
+    else if (act === "rotate" && s) rotatePhoto(s);
     else if (act === "view" && s?.card.thumb) openViewer(s.card.thumb);
     else if (act === "reread" && s) reread(s);
     else if (act === "openSettings") openSettings();
