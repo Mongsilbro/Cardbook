@@ -771,6 +771,28 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     if (a === "backup") exportBackup();
     else if (a === "later") { store(KEY_BACKUP, { ...load(KEY_BACKUP, {}), snooze: Date.now() + 3 * DAY }); renderBackupNag(); }
   });
+  // 목록 사진: 수십 KB짜리 data: 주소를 글자 칠 때마다 HTML에 다시 넣으면 명함이 많을 때 검색이 버벅임(200장에 28MB).
+  // 명함마다 한 번만 짧은 blob: 주소로 바꿔 재사용 (사진이 바뀌면 새로 만들고, 지운 명함 것은 정리)
+  const thumbUrls = new Map(); // id → { src, url }
+  function thumbUrl(c) {
+    const hit = thumbUrls.get(c.id);
+    if (hit && hit.src === c.thumb) return hit.url;
+    if (hit) URL.revokeObjectURL(hit.url);
+    const m = /^data:([^;,]+);base64,/.exec(c.thumb);
+    if (!m) return c.thumb;
+    try {
+      const bin = atob(c.thumb.slice(m[0].length)), u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([u8], { type: m[1] }));
+      thumbUrls.set(c.id, { src: c.thumb, url });
+      return url;
+    } catch { return c.thumb; }
+  }
+  function pruneThumbUrls() {
+    if (thumbUrls.size <= cards.length) return;
+    const live = new Set(cards.map(c => c.id));
+    for (const [id, v] of thumbUrls) if (!live.has(id)) { URL.revokeObjectURL(v.url); thumbUrls.delete(id); }
+  }
   function renderList() {
     renderBackupNag();
     $("count").textContent = cards.length + "장";
@@ -793,13 +815,14 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     list.innerHTML = shown.map(c => `
       <div class="swipe"><button class="swipe-del" type="button" data-del="${esc(c.id)}" tabindex="-1" aria-hidden="true">삭제</button>
       <button class="item" type="button" data-id="${esc(c.id)}">
-        <span class="thumb">${c.thumb ? `<img src="${esc(c.thumb)}" alt="">` : `<span class="initial" aria-hidden="true">${esc(([...(c.name || c.company || "명").trim()][0] || "명").toUpperCase())}</span>`}</span>
+        <span class="thumb">${c.thumb ? `<img src="${esc(thumbUrl(c))}" alt="" loading="lazy" decoding="async">` : `<span class="initial" aria-hidden="true">${esc(([...(c.name || c.company || "명").trim()][0] || "명").toUpperCase())}</span>`}</span>
         <span class="meta">
           <span class="name">${esc(c.name || "이름 없음")}${c.jobTitle ? `<small>${esc(c.jobTitle)}</small>` : ""}</span>
           <span class="org">${esc([c.company, c.department].filter(Boolean).join(" · ") || "회사 정보 없음")}</span>
           ${c.mobile || c.phone ? `<span class="tel">${esc(c.mobile || c.phone)}</span>` : ""}
         </span>
       </button></div>`).join("");
+    pruneThumbUrls();
   }
   // 실수로 지웠을 때를 위해 6초 동안 '되돌리기' (같은 자리로 복원) — 상세 화면 삭제와 목록 밀어서 삭제가 함께 씀
   function deleteCard(id) {
