@@ -63,6 +63,12 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 .sortbar { display: flex; justify-content: flex-end; gap: 4px; margin: -6px 0 -6px; }
 .sortbar button { appearance: none; border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; padding: 6px 10px; min-height: 36px; border-radius: 999px; -webkit-tap-highlight-color: transparent; }
 .sortbar button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.searchbox { position: relative; }
+.noresult { display: grid; justify-items: center; gap: 10px; padding: 16px 0; text-align: center; }
+.searchbox .search { padding-right: 48px; }
+.search::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; } /* 키보드를 내리면 사라지는 기본 ⓧ 대신 늘 보이는 버튼 */
+.search-clear { position: absolute; top: 0; right: 0; bottom: 0; width: 48px; display: grid; place-items: center; border: 0; background: none; color: var(--muted); padding: 0; cursor: pointer; }
+.search-clear span { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--muted); color: var(--surface); font-size: 13px; line-height: 1; font-weight: 700; }
 .search { width: 100%; font: inherit; font-size: 16px; padding: 11px 14px; border-radius: var(--r); border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
 .note { font-size: 14px; color: var(--muted); margin: 0; }
 .note b { color: var(--fg); font-weight: 500; }
@@ -192,7 +198,10 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
 
   <div id="draftNag"></div>
   <div id="backupNag"></div>
-  <input class="search" id="search" type="search" placeholder="이름, 회사, 전화번호, 초성(ㅎㄱㄷ) 검색" autocomplete="off">
+  <div class="searchbox">
+    <input class="search" id="search" type="search" placeholder="이름, 회사, 전화번호, 초성(ㅎㄱㄷ) 검색" aria-label="명함 검색" autocomplete="off" enterkeyhint="search">
+    <button class="search-clear" id="searchClear" type="button" aria-label="검색어 지우기" hidden><span aria-hidden="true">✕</span></button>
+  </div>
   <div class="sortbar" id="sortbar" role="group" aria-label="정렬" hidden>
     <button type="button" data-sort="recent">최근 등록순</button><button type="button" data-sort="name">이름순</button>
   </div>
@@ -815,7 +824,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     const label = (c) => (c.name || c.company || "").trim();
     const shown = cards.filter(c => matches(c, query));
     if (sortMode === "name") shown.sort((a, b) => !label(a) - !label(b) || label(a).localeCompare(label(b), "ko"));
-    if (!shown.length) { list.innerHTML = `<p class="note">'${esc(query)}'에 맞는 명함이 없습니다.</p>`; return; }
+    if (!shown.length) { list.innerHTML = `<div class="noresult"><p class="note">'${esc(query)}'에 맞는 명함이 없습니다.</p><button class="btn small" type="button" data-clear-search>검색어 지우기</button></div>`; return; }
     list.innerHTML = shown.map(c => `
       <div class="swipe"><button class="swipe-del" type="button" data-del="${esc(c.id)}" tabindex="-1" aria-hidden="true">삭제</button>
       <button class="item" type="button" data-id="${esc(c.id)}">
@@ -915,6 +924,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
   $("list").addEventListener("pointerup", endSwipe);
   $("list").addEventListener("pointercancel", endSwipe);
   $("list").addEventListener("click", (e) => {
+    if (e.target.closest("[data-clear-search]")) { clearSearch(); return; }
     if (Date.now() < swallowUntil) return;
     const del = e.target.closest("[data-del]");
     if (del) { openRow = null; deleteCard(del.dataset.del); return; }
@@ -922,7 +932,15 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     if (tapClosesRow || openRow) { tapClosesRow = false; closeOpenRow(); return; } // 열린 줄이 있으면 먼저 닫기만
     const c = cards.find(x => x.id === b.dataset.id); if (c) openDetail(c);
   });
-  $("search").addEventListener("input", (e) => { query = e.target.value.trim(); renderList(); });
+  $("search").addEventListener("input", (e) => { query = e.target.value.trim(); $("searchClear").hidden = !e.target.value; renderList(); });
+  $("search").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) e.target.blur(); }); // '검색' 키로 키보드 내려 결과 보기
+  // 검색어 지우기: ✕ 버튼(키보드를 내려도 보임), 결과 없음 안내의 버튼. 키보드는 다시 올리지 않음(목록을 보려는 경우가 많음)
+  function clearSearch() {
+    const a = document.activeElement, fromBtn = a && (a.id === "searchClear" || a.hasAttribute?.("data-clear-search"));
+    $("search").value = ""; query = ""; $("searchClear").hidden = true; renderList();
+    if (fromBtn) $("list").querySelector(".item")?.focus({ preventScroll: true }); // 누른 버튼이 사라져도 초점(화면 읽기)이 목록으로
+  }
+  $("searchClear").addEventListener("click", clearSearch);
   $("add").addEventListener("click", () => {
     openEdit({ ...blankCard(), id: null, thumb: "" });
     if (hasKey(gemini)) $("photoIn")?.click(); // 키가 있으면 바로 카메라·사진 고르기 (같은 탭 안에서 불러야 iOS가 허용)
