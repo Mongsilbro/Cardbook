@@ -102,6 +102,7 @@ push 권한이 있으면 커밋·푸시하면 1~2분 뒤 반영된다고 사용�
 U=/tmp/upgrade-skills; rm -rf $U && GIT_LFS_SKIP_SMUDGE=1 git clone -q --depth 1 https://github.com/Mongsilbro/upgrade $U && ls $U/.claude/skills
 ```
 
+- **필요할 때만 쓴다 (사용자 지시, 2026-11-24)**: 작업에 실제로 도움이 되는 스킬만 적용하고, 맞는 게 없으면 억지로 쓰지 않는다. 보고에는 실제로 쓴 스킬만 적는다(없으면 생략).
 - 각 `SKILL.md`의 description을 보고 상황에 맞는 것을 따른다. 예: 버그·테스트 실패 → `systematic-debugging`(원인부터, 가설 하나씩, 세 번 실패하면 사용자와 상의),
   보안 지적 → `vulnerability-triage`, 사용자가 계획을 따져 묻기를 원할 때 → `grilling`.
 - `second-opinion`(OpenRouter 무료 모델)은 **코드·설계 질문에만**. 명함 내용·이름·전화·이메일·API 키 등 개인정보는 절대 보내지 않는다.
