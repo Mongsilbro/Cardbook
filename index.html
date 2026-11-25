@@ -764,15 +764,23 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     return dq.length >= 3 && ["mobile","phone","fax"].some(k => digits(c[k]).includes(dq));
   }
   // 백업 알림: 마지막 백업 뒤 새로 넣거나 고친 명함이 3장 이상, 또는 1장 이상이고 14일이 지났으면 목록 위에 띄움 (백업한 적 없으면 3장부터)
+  // 아이폰이 저장 공간 '오래 보관'을 허용하지 않았으면(persisted false) Safari가 7일 넘게 안 연 사이트 데이터를 지울 수 있어,
+  // 백업 안 된 명함이 생긴 지 2일이 지나면 1장이라도 알림 (7일 전에 백업할 기회를 줌)
   const DAY = 86400000;
+  let storageKept = null;
+  try { navigator.storage?.persisted?.().then(v => { storageKept = v; renderBackupNag(); }, () => {}); } catch {}
   function renderBackupNag() {
     const b = load(KEY_BACKUP, {}), now = Date.now();
-    const changed = cards.filter(c => (c.updatedAt || c.createdAt || 0) > (b.at || 0)).length;
-    const due = b.at ? changed >= 3 || (changed >= 1 && now - b.at >= 14 * DAY) : cards.length >= 3;
+    const unsaved = cards.filter(c => (c.updatedAt || c.createdAt || 0) > (b.at || 0));
+    const changed = unsaved.length;
+    const oldest = Math.min(...unsaved.map(c => c.updatedAt || c.createdAt || now), now);
+    const atRisk = storageKept !== true;
+    const due = (b.at ? changed >= 3 || (changed >= 1 && now - b.at >= 14 * DAY) : cards.length >= 3)
+      || (atRisk && changed >= 1 && now - oldest >= 2 * DAY);
     const el = $("backupNag");
     if (!due || (b.snooze || 0) > now) { el.innerHTML = ""; return; }
     const msg = b.at ? `마지막 백업(${Math.max(1, Math.floor((now - b.at) / DAY))}일 전) 뒤로 바뀐 명함이 ${changed}장 있습니다.` : `아직 백업한 적이 없습니다. 명함 ${cards.length}장이 이 아이폰에만 있습니다.`;
-    el.innerHTML = `<div class="nag"><p>${msg}<br><span class="note">Safari 기록을 지우면 함께 사라지니 '파일' 앱에 백업해 두세요.</span></p>
+    el.innerHTML = `<div class="nag"><p>${msg}<br><span class="note">${atRisk ? "이 아이폰은 Safari에서 7일 넘게 이 앱을 열지 않으면 명함을 지울 수 있습니다. '파일' 앱에 백업해 두세요." : "Safari 기록을 지우면 함께 사라지니 '파일' 앱에 백업해 두세요."}</span></p>
       <div class="row2"><button class="btn small primary" type="button" data-nag="backup">지금 백업</button><button class="btn small" type="button" data-nag="later">나중에</button></div></div>`;
   }
   function exportBackup() {
