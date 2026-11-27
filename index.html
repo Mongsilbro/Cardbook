@@ -1047,6 +1047,7 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
           ${f("address","주소",{area:true,rows:2})}${f("memo","메모",{area:true,rows:3})}
         </div></div>
         <button class="btn primary" type="button" data-act="save">저장</button>
+        ${isNew ? `<button class="btn" type="button" data-act="saveContact">저장하고 아이폰 연락처에도 추가</button>` : ""}
       </div>`);
 
     // 사용자가 직접 고친 칸은 자동 채우기에서 덮어쓰지 않음
@@ -1371,9 +1372,12 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
     sortCards();
     if (!saveCards()) { showToast("저장하지 못했습니다. Safari 설정에서 방문 기록·웹사이트 데이터 차단을 확인해 주세요."); return; }
     clearDraft(sheet);
+    const alsoContact = sheet.alsoContact;
     renderList();
     showToast("저장했습니다");
     openDetail(c, true);
+    // '저장하고 연락처에도 추가': 같은 탭 처리 안에서 바로 연락처 파일을 열어야 아이폰이 연락처 화면을 띄움
+    if (alsoContact) addToContacts(c);
   }
 
   function openDetail(c, justSaved) {
@@ -1542,7 +1546,8 @@ h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
       }
       closeSheet();
     }
-    else if (act === "save") saveEdit();
+    else if (act === "save") { if (s?.kind === "edit") s.alsoContact = false; saveEdit(); }
+    else if (act === "saveContact") { if (s?.kind === "edit") s.alsoContact = true; saveEdit(); } // 같은 사람 확인이 뜨면 합치기·따로 저장 때 연락처도 함께
     else if (act === "saveMerge") saveEdit("merge");
     else if (act === "saveNew") saveEdit("new");
     else if (act === "edit" && s) openEdit({ ...s.card });
